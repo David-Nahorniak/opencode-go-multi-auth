@@ -1,0 +1,38 @@
+services:
+  opencode-router:
+    # Image published by the Forgejo CI to the Forgejo Container Registry.
+    # See .forgejo/workflows/build-and-publish.yml
+    image: git.nahorniak.cz/david-nahorniak/opencode-go-multi-auth:latest
+    container_name: opencode-router
+    restart: unless-stopped
+
+    ports:
+      - "18904:18904"   # dashboard web UI
+      - "18905:18905"   # proxy / API endpoint (opencode points here)
+
+    volumes:
+      # Persisted runtime state: config, encrypted keys, state, logs, pid file.
+      # Maps to CONFIG_DIR=/data (set in the image).
+      - opencode-router-data:/data
+
+    environment:
+      OPENCODE_ROUTER_PLUGIN_MODE: "1"
+      DASHBOARD_PORT: "18904"
+      PROXY_PORT: "18905"
+      UPSTREAM_URL: "https://opencode.ai/zen/go/v1"
+      LOG_LEVEL: "info"
+      # CONFIG_DIR is baked into the image as /data; keep it consistent with the volume.
+      CONFIG_DIR: "/data"
+      # Optional: define any of the values from .env.example here, e.g.
+      # NTFY_URL: "https://ntfy.sh/mytopic"
+      # REQUEST_TIMEOUT_MS: "0"
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18904/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  opencode-router-data:
