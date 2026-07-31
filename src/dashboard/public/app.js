@@ -125,6 +125,9 @@ const api = {
   notifications() { return this.req('/api/notifications'); },
   testKey(id) { return this.req(`/api/keys/${id}/test`, { method: 'POST' }); },
   recentLogs() { return this.req('/api/logs'); },
+  goUsage() { return this.req('/api/go-usage'); },
+  goUsageConfig() { return this.req('/api/go-usage-config'); },
+  setGoUsageConfig(payload) { return this.req('/api/go-usage-config', { method: 'PUT', body: payload }); },
 };
 
 // ---------------------------------------------------------------------------
@@ -148,6 +151,10 @@ const state = {
   zenProviderName: 'multi-auth-zen', // opencode.json provider name for drift detection
   zenDriftAnnounced: null, // last drift signature announced via toast (per session)
   zenDriftTimer: null,      // setTimeout handle for 12h re-check
+  goUsage: null,            // last OpenCode Go usage scrape result
+  goUsageConfig: null,      // { workspaceId, authCookieMasked, configured }
+  goPlanTimer: null,        // 60s usage poll interval while the page is open
+  goPlanBusy: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -169,6 +176,10 @@ function setPage(page) {
       state.zenDriftTimer = null;
     }
   }
+  if (page !== 'go-plan' && state.goPlanTimer) {
+    clearInterval(state.goPlanTimer);
+    state.goPlanTimer = null;
+  }
   state.currentPage = page;
   $$('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.page === page));
   $$('.page').forEach((el) => el.classList.toggle('active', el.dataset.page === page));
@@ -179,6 +190,7 @@ function setPage(page) {
   if (page === 'tokens') renderTokens();
   if (page === 'models') renderModels();
   if (page === 'settings') renderSettings();
+  if (page === 'go-plan') renderGoPlan();
 }
 
 function initRouting() {
@@ -197,6 +209,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTokensPage();
   initLogsToolbar();
   initSearch();
+  initGoPlan();
   connectWebSocket();
   await refreshAll();
   await backfillLogs();
@@ -2300,3 +2313,162 @@ async function renderSettings() {
 
 // Render settings on first visit
 on('settings:first-visit', renderSettings);
+
+// ---------------------------------------------------------------------------
+// Go plan — rolling / weekly / monthly usage scraped from opencode.ai
+// ---------------------------------------------------------------------------
+
+const goPlanRefreshBtn = () => $('#go-plan-refresh');
+
+function fmtSecDuration(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  if (s <= 0) return 'now';
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
+function goPlanBarClass(pct) {
+  if (pct >= 80) return 'is-crit';
+  if (pct >= 50) return 'is-warn';
+  return 'is-ok';
+}
+
+function renderGoPlanWindow(name, label, data) {
+  const pct = Number(data?.usagePercent ?? 0);
+  const rem = 100 - pct;
+  return `
+    <div class="go-plan-window-card">
+      <div class="go-plan-window-head">
+        <span class="go-plan-window-label">${escapeHtml(label)}</span>
+        <span class="go-plan-window-reset">Resets in ${escapeHtml(fmtSecDuration(data?.resetInSec))}</span>
+      </div>
+      <div class="go-plan-bar"><div class="go-plan-bar-fill ${goPlanBarClass(pct)}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div></div>
+      <div class="go-plan-window-foot">
+        <span class="go-plan-pct">${pct.toFixed(1)}% used</span>
+        <span class="go-plan-remaining">${rem.toFixed(1)}% remaining</span>
+        <span class="go-plan-reset-abs">reset ${escapeHtml(fmtDateTime(data?.resetTimeIso))}</span>
+      </div>
+    </div>`;
+}
+
+async function renderGoPlan() {
+  const body = $('#go-plan-body');
+  const meta = $('#go-plan-config-meta');
+  if (!body) return;
+
+  try {
+    state.goUsageConfig = await api.goUsageConfig();
+  } catch (err) {
+    state.goUsageConfig = null;
+  }
+  const cfg = state.goUsageConfig;
+  const wsInput = $('#go-plan-workspace');
+  const cookieMask = $('#go-plan-cookie-mask');
+  if (wsInput && cfg) wsInput.value = cfg.workspaceId || '';
+  if (cookieMask && cfg) cookieMask.textContent = cfg.authCookieMasked ? `(stored: ${cfg.authCookieMasked})` : '';
+  if (meta) meta.textContent = cfg?.configured ? 'Configured' : 'Not configured yet';
+
+  if (!cfg?.configured) {
+    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Fill in your workspace credentials above to start pulling Go plan usage.</div></div></div>`;
+    return;
+  }
+
+  if (state.goPlanBusy) return;
+  state.goPlanBusy = true;
+
+  body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Scraping workspace dashboard…</div></div></div>`;
+
+  try {
+    state.goUsage = await api.goUsage();
+  } catch (err) {
+    state.goUsage = { success: false, error: err instanceof Error ? err.message : String(err), fetchedAt: Date.now() };
+  }
+  state.goPlanBusy = false;
+  renderGoPlanBody();
+
+  if (!state.goPlanTimer) {
+    state.goPlanTimer = setInterval(async () => {
+      if (state.currentPage !== 'go-plan') return;
+      try { state.goUsage = await api.goUsage(); } catch {}
+      renderGoPlanBody();
+    }, 60_000);
+  }
+}
+
+function renderGoPlanBody() {
+  const body = $('#go-plan-body');
+  if (!body) return;
+  const data = state.goUsage;
+  if (!data) return;
+
+  if (!data.success) {
+    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">${escapeHtml(data.error || 'Failed to fetch Go plan usage')}</div></div></div>`;
+    return;
+  }
+
+  const windows = [];
+  if (data.rolling) windows.push(renderGoPlanWindow('rolling', 'Rolling usage (5h)', data.rolling));
+  if (data.weekly) windows.push(renderGoPlanWindow('weekly', 'Weekly usage', data.weekly));
+  if (data.monthly) windows.push(renderGoPlanWindow('monthly', 'Monthly usage', data.monthly));
+
+  if (!windows.length) {
+    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Dashboard parsed but no usage windows were found.</div></div></div>`;
+    return;
+  }
+
+  const fetched = fmtDateTime(new Date(data.fetchedAt || Date.now()).toISOString());
+  body.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h3>Plan usage</h3>
+        <span class="panel-meta">Last updated ${escapeHtml(fetched)} · auto-refresh 60s</span>
+      </div>
+      <div class="card-body">
+        <div class="go-plan-window">${windows.join('')}</div>
+      </div>
+    </div>`;
+}
+
+function initGoPlan() {
+  const refresh = () => { if (state.currentPage === 'go-plan') renderGoPlan(); };
+  const btn = goPlanRefreshBtn();
+  if (btn) btn.addEventListener('click', refresh);
+
+  const save = $('#go-plan-save');
+  if (save) {
+    save.addEventListener('click', async () => {
+      const workspaceId = ($('#go-plan-workspace')?.value || '').trim();
+      const authCookie = ($('#go-plan-cookie')?.value || '').trim();
+      const payload = {};
+      if (workspaceId) payload.workspaceId = workspaceId;
+      if (authCookie) payload.authCookie = authCookie;
+      if (!Object.keys(payload).length) { toast('Enter a workspace ID or auth cookie first', 'error'); return; }
+      try {
+        await api.setGoUsageConfig(payload);
+        toast('Go plan credentials saved', 'success');
+        ($('#go-plan-cookie') || {}).value = '';
+        await renderGoPlan();
+      } catch (err) {
+        toast('Failed to save: ' + (err instanceof Error ? err.message : String(err)), 'error');
+      }
+    });
+  }
+
+  const clear = $('#go-plan-clear');
+  if (clear) {
+    clear.addEventListener('click', async () => {
+      try {
+        await api.setGoUsageConfig({ workspaceId: '', authCookie: '' });
+        toast('Go plan credentials cleared', 'success');
+        await renderGoPlan();
+      } catch (err) {
+        toast('Failed to clear: ' + (err instanceof Error ? err.message : String(err)), 'error');
+      }
+    });
+  }
+}

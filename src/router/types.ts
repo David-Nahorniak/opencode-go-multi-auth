@@ -86,6 +86,10 @@ export interface RouterConfig {
   upstreamHungTimeoutMs: number
   keepAliveTimeoutMs: number
   headersTimeoutMs: number
+  // OpenCode Go plan usage scraping (opencode.ai account session, not the
+  // Go API key). See src/proxy/opencode-go-usage.ts. Empty = disabled.
+  opencodeGoUsageWorkspaceId: string
+  opencodeGoUsageAuthCookie: string
 }
 
 export const ROUTING_STRATEGIES: RoutingStrategyInfo[] = [
@@ -156,6 +160,8 @@ export const DEFAULT_CONFIG: RouterConfig = {
   upstreamHungTimeoutMs: 0,
   keepAliveTimeoutMs: 5 * 60 * 1000,
   headersTimeoutMs: 60 * 1000,
+  opencodeGoUsageWorkspaceId: '',
+  opencodeGoUsageAuthCookie: '',
 }
 
 export enum CircuitState {

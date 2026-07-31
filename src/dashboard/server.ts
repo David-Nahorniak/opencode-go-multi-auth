@@ -13,6 +13,7 @@ import { SecureStore } from '../storage/secure-store.js'
 import { ConfigStore } from '../storage/config-store.js'
 import { NtfyNotifier } from '../notification/ntfy.js'
 import { OpenCodeUsageStore } from '../storage/opencode-usage-store.js'
+import { queryOpenCodeGoUsage } from '../proxy/opencode-go-usage.js'
 import {
   RoutingStrategy,
   ROUTING_STRATEGIES,
@@ -353,6 +354,49 @@ export class DashboardServer {
       res.json(this.logStream.getRecentLogs())
     })
 
+    this.app.get('/api/go-usage', wrap(async (_req, res) => {
+      const creds = this.resolveGoUsageCreds()
+      if (!creds) {
+        res.json({ success: false, configured: false, fetchedAt: Date.now(), error: 'Not configured' })
+        return
+      }
+      const result = await queryOpenCodeGoUsage(creds)
+      res.json(result)
+    }))
+
+    this.app.get('/api/go-usage-config', (_req, res) => {
+      const configured = this.isGoUsageConfigured()
+      res.json({
+        // Never echo the secret back. The masked tail is enough to confirm
+        // which cookie is stored without exposing it.
+        workspaceId: this.configStore.get('opencodeGoUsageWorkspaceId') || '',
+        authCookieMasked: this.maskCookie(this.configStore.get('opencodeGoUsageAuthCookie')),
+        configured,
+      })
+    })
+
+    this.app.put('/api/go-usage-config', (req, res) => {
+      const body = req.body ?? {}
+      if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
+        res.status(400).json({ error: 'workspaceId and/or authCookie required' })
+        return
+      }
+      // Fields present in the body are assigned verbatim (an empty string
+      // clears that field). Absent fields are left untouched, so a partial
+      // update can change just the workspace ID without wiping the cookie.
+      if ('workspaceId' in body && typeof body.workspaceId === 'string') {
+        this.configStore.set('opencodeGoUsageWorkspaceId', body.workspaceId.trim() as any)
+      }
+      if ('authCookie' in body && typeof body.authCookie === 'string') {
+        this.configStore.set('opencodeGoUsageAuthCookie', body.authCookie.trim() as any)
+      }
+      res.json({
+        workspaceId: this.configStore.get('opencodeGoUsageWorkspaceId') || '',
+        authCookieMasked: this.maskCookie(this.configStore.get('opencodeGoUsageAuthCookie')),
+        configured: this.isGoUsageConfigured(),
+      })
+    })
+
     this.app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       const message = err instanceof Error ? err.message : String(err)
       logToFile('error', 'API error', { error: message })
@@ -383,6 +427,25 @@ export class DashboardServer {
 
   private async persistKeys(): Promise<void> {
     await this.secureStore.saveKeys(this.keyManager.toStoredEntries())
+  }
+
+  private resolveGoUsageCreds(): { workspaceId: string; authCookie: string } | null {
+    const workspaceId = (this.configStore.get('opencodeGoUsageWorkspaceId') || '').trim()
+    const authCookie = (this.configStore.get('opencodeGoUsageAuthCookie') || '').trim()
+    if (!workspaceId || !authCookie) return null
+    return { workspaceId, authCookie }
+  }
+
+  private isGoUsageConfigured(): boolean {
+    const workspaceId = (this.configStore.get('opencodeGoUsageWorkspaceId') || '').trim()
+    const authCookie = (this.configStore.get('opencodeGoUsageAuthCookie') || '').trim()
+    return Boolean(workspaceId && authCookie)
+  }
+
+  private maskCookie(cookie: string): string {
+    if (!cookie) return ''
+    if (cookie.length <= 8) return '****'
+    return `${cookie.slice(0, 3)}…${cookie.slice(-4)} (${cookie.length})`
   }
 
   private serializeKeys() {
