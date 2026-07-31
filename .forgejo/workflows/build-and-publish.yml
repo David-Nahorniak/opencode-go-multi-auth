@@ -1,3 +1,5 @@
+#inspire from: https://tech-tales.blog/en/posts/2024/08-create-simple-container-image/
+
 name: build-and-publish
 
 on:
@@ -5,13 +7,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# PAT pro push do Packages: token s `package: write` scopem
-# uložený v repu jako Secret `PUB_TOKEN`.
-# DOCKER_HOST ukazuje na dind daemon (compose služba `docker-in-docker`).
+
 
 env:
   CONTAINER_REGISTRY: ${{ github.server_url }}
-  DOCKER_HOST: tcp://docker-in-docker:2375
 
 jobs:
   docker:
