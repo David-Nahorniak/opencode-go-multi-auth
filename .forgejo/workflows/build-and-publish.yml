@@ -1,0 +1,64 @@
+name: build-and-publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# PAT pro push do Packages: token s `package: write` scopem
+# uložený v repu jako Secret `PUB_TOKEN`.
+# DOCKER_HOST ukazuje na dind daemon (compose služba `docker-in-docker`).
+
+env:
+  CONTAINER_REGISTRY: ${{ github.server_url }}
+  DOCKER_HOST: tcp://docker-in-docker:2375
+
+jobs:
+  docker:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify docker daemon reachable
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Lowercase owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Derive image reference
+        id: img
+        env:
+          REF: ${{ github.ref }}
+          OWNER: ${{ steps.owner.outputs.name }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          VERSION="${REF#refs/tags/v}"
+          HOST="$(printf '%s' "${CONTAINER_REGISTRY}" | sed 's|^https\?://||')"
+          echo "name=${HOST}/${OWNER}/${REPO}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Forgejo Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.PUB_TOKEN }}
+
+      - name: Build
+        env:
+          IMG: ${{ steps.img.outputs.name }}
+          VER: ${{ steps.img.outputs.version }}
+        run: |
+          docker build \
+            -t "${IMG}:${VER}" \
+            -t "${IMG}:latest" \
+            -f ./Dockerfile .
+
+      - name: Push
+        env:
+          IMG: ${{ steps.img.outputs.name }}
+          VER: ${{ steps.img.outputs.version }}
+        run: |
+          docker push "${IMG}:${VER}"
+          docker push "${IMG}:latest"
