@@ -1,4 +1,5 @@
 import { KeyManager } from './key-manager.js'
+import crypto from 'node:crypto'
 import { CircuitBreaker } from './circuit-breaker.js'
 import { QuotaTracker } from './quota-tracker.js'
 import { ProxyServer } from '../proxy/server.js'
@@ -119,6 +120,17 @@ if (notifier.enabled) {
   logToFile('info', `Notifications enabled via Apprise`)
 }
 
+  // Client-facing proxy access token. Generated once on first boot and
+  // persisted in router-config.json; the proxy enforces it on :18905 and
+  // opencode must send it as the provider `apiKey`. The token is never
+  // written to the rotating log file — only surfaced via the setup box
+  // (standalone mode) and the dashboard Settings page.
+  if (!configStore.get('proxyAccessToken')) {
+    const token = crypto.randomBytes(24).toString('base64url')
+    configStore.set('proxyAccessToken', token)
+    mergedConfig.proxyAccessToken = token
+  }
+
   const proxyServer = new ProxyServer(
     {
       port: mergedConfig.proxyPort,
@@ -129,6 +141,11 @@ if (notifier.enabled) {
       fallbackCooldownMs: mergedConfig.cooldownMs,
       keepAliveTimeoutMs: mergedConfig.keepAliveTimeoutMs,
       headersTimeoutMs: mergedConfig.headersTimeoutMs,
+      getAccessToken: () => configStore.get('proxyAccessToken') || '',
+      getDisabledModels: () => {
+        const raw = configStore.get('disabledModels') || ''
+        return raw.split(',').map((s) => s.trim()).filter(Boolean)
+      },
     },
     keyManager,
     circuitBreaker,
@@ -161,7 +178,7 @@ if (notifier.enabled) {
   logStream.emit(logger, 'info', `Loaded ${storedKeys.length} API key(s)`)
 
   if (!options.suppressSetupInstructions && !getPluginMode()) {
-    printSetupInstructions(mergedConfig.proxyPort, mergedConfig.dashboardPort)
+    printSetupInstructions(mergedConfig.proxyPort, mergedConfig.dashboardPort, configStore.get('proxyAccessToken') || '')
   }
 
   return {

@@ -117,11 +117,15 @@ const api = {
   setConfig(payload) { return this.req('/api/config', { method: 'PUT', body: payload }); },
   models() { return this.req('/api/models'); },
   visibleModels() { return this.req('/api/visible-models'); },
-  zenProviderModels(provider) {
+ zenProviderModels(provider) {
     const q = encodeURIComponent(provider || 'multi-auth-zen')
     return this.req(`/api/zen-provider-models?provider=${q}`)
   },
   setVisibleModels(payload) { return this.req('/api/visible-models', { method: 'PUT', body: payload }); },
+  disabledModels() { return this.req('/api/disabled-models'); },
+  setDisabledModels(payload) { return this.req('/api/disabled-models', { method: 'PUT', body: payload }); },
+  proxyToken() { return this.req('/api/proxy-token'); },
+  regenerateProxyToken() { return this.req('/api/proxy-token/regenerate', { method: 'POST' }); },
   testNotification(payload) { return this.req('/api/notifications/test', { method: 'POST', body: payload }); },
   notifications() { return this.req('/api/notifications'); },
   testKey(id) { return this.req(`/api/keys/${id}/test`, { method: 'POST' }); },
@@ -179,7 +183,6 @@ function setPage(page) {
   $$('.page').forEach((el) => el.classList.toggle('active', el.dataset.page === page));
   if (page === 'logs') ensureLogRender();
   if (page === 'overview') renderOverview();
-  if (page === 'routing') renderRouting();
   if (page === 'accounts') renderAccounts();
   if (page === 'tokens') renderTokens();
   if (page === 'models') renderModels();
@@ -256,7 +259,7 @@ async function refreshSnapshot() {
   $('#nav-keys-count').textContent = String(data.summary.enabledKeys);
   if (state.currentPage === 'overview') renderOverview();
   renderAccounts();
-  if (state.currentPage === 'routing') renderRouting();
+  if (state.currentPage === 'settings') renderRouting();
 }
 
 window.__refreshAll = refreshAll;
@@ -2047,7 +2050,7 @@ async function renderModels() {
   }
   const providerName = state.zenProviderName || 'multi-auth-zen';
 
-  const [modelsData, vm, drift] = await Promise.all([
+  const [modelsData, vm, drift, dm] = await Promise.all([
     api.models(),
     api.visibleModels(),
     api.zenProviderModels(providerName).catch((err) => ({
@@ -2060,9 +2063,11 @@ async function renderModels() {
       liveError: err instanceof Error ? err.message : String(err),
       lastCheckAt: Date.now(),
     })),
+    api.disabledModels().catch(() => ({ models: [] })),
   ]);
   const selected = new Set(vm.models || []);
   state.visibleModels = vm.models || null;
+  const disabledSet = new Set(dm.models || []);
 
   const renderGroup = (title, models) => models.length ? `
     <div class="model-group">
@@ -2102,6 +2107,47 @@ async function renderModels() {
       toast('Failed to save: ' + (err instanceof Error ? err.message : String(err)), 'error');
     }
   };
+
+  // Proxy — model access (blocklist). Checked = enabled (served by the
+  // proxy). Unchecked = added to the disabled set, which the proxy blocks
+  // with a 404. New upstream models are enabled by default.
+  const proxyHost = $('#proxy-models-list');
+  if (proxyHost) {
+    const allModels = [...(modelsData.go || []), ...(modelsData.zen || [])];
+    const renderProxyGroup = (title, models) => models.length ? `
+      <div class="model-group">
+        <div class="model-group-title">${escapeHtml(title)}</div>
+        ${models.map((m) => {
+          const id = m.id || m;
+          const enabled = !disabledSet.has(id);
+          return `
+            <label class="model-check-row">
+              <input type="checkbox" class="proxy-model-check" value="${escapeHtml(id)}" ${enabled ? 'checked' : ''}>
+              <span class="model-check-id">${escapeHtml(id)}</span>
+              ${disabledSet.has(id) ? '<span class="chip chip-muted" style="margin-left:6px;">disabled</span>' : ''}
+            </label>
+          `;
+        }).join('')}
+      </div>` : '';
+    proxyHost.innerHTML = renderProxyGroup('OpenCode Go', modelsData.go || [])
+      + renderProxyGroup('OpenCode Zen', modelsData.zen || []);
+    if (!allModels.length) proxyHost.innerHTML = '<div class="empty-state">Could not fetch model list from the proxy.</div>';
+
+    $('#proxy-models-enable-all').onclick = () => { $$('.proxy-model-check', proxyHost).forEach((cb) => cb.checked = true); };
+    $('#proxy-models-disable-all').onclick = () => { $$('.proxy-model-check', proxyHost).forEach((cb) => cb.checked = false); };
+    $('#proxy-models-save').onclick = async () => {
+      const disabled = [...$$('.proxy-model-check:not(:checked)', proxyHost)].map((cb) => cb.value);
+      try {
+        await api.setDisabledModels({ models: disabled });
+        disabledSet.clear();
+        disabled.forEach((m) => disabledSet.add(m));
+        renderModels();
+        toast(`Proxy blocklist saved — ${disabled.length} model(s) disabled`, 'success');
+      } catch (err) {
+        toast('Failed to save: ' + (err instanceof Error ? err.message : String(err)), 'error');
+      }
+    };
+  }
 }
 
 function renderZenDrift(drift) {
@@ -2229,7 +2275,13 @@ function announceDriftToast(drift, message, kind) {
 async function renderSettings() {
   const table = $('#config-table');
   if (!table) return;
-  const [status, current, cfg] = await Promise.all([api.status(), api.currentStrategy(), api.config()]);
+  const [status, current, cfg, tokenRes] = await Promise.all([
+    api.status(),
+    api.currentStrategy(),
+    api.config(),
+    api.proxyToken().catch(() => ({ token: '' })),
+  ]);
+  const proxyToken = tokenRes.token || '';
   const ports = window.location.port ? `:${window.location.port}` : '';
   const baseUrl = `${location.protocol}//${location.hostname}${ports === ':18904' ? ':18905' : ports}`;
   const proxyHost = `${location.protocol}//${location.hostname}:18905`;
@@ -2248,6 +2300,34 @@ async function renderSettings() {
     <div class="config-key">${escapeHtml(k)}</div>
     <div class="config-val">${escapeHtml(v)}</div>
   `).join('');
+
+  // Routing strategy selector (moved from the former Routing tab).
+  renderRouting();
+
+  // Proxy access token display + actions.
+  const tokenInput = $('#proxy-token-value');
+  const tokenMeta = $('#proxy-token-meta');
+  if (tokenInput) tokenInput.value = proxyToken || '(not set)';
+  if (tokenMeta) {
+    tokenMeta.textContent = proxyToken
+      ? 'Required on every request to the proxy (:18905). Match opencode provider apiKey.'
+      : 'No token set — proxy is open (unauthenticated).';
+  }
+  $('#proxy-token-copy').onclick = async () => {
+    if (!proxyToken) { toast('No token to copy', 'error'); return; }
+    try { await navigator.clipboard.writeText(proxyToken); toast('Proxy token copied', 'success'); }
+    catch { toast('Could not copy', 'error'); }
+  };
+  $('#proxy-token-regenerate').onclick = async () => {
+    if (!confirm('Regenerate the proxy access token? opencode will stop working until you update opencode.json with the new token.')) return;
+    try {
+      const res = await api.regenerateProxyToken();
+      if (tokenInput) tokenInput.value = res.token || '';
+      if (tokenMeta) tokenMeta.textContent = 'Required on every request to the proxy (:18905). Match opencode provider apiKey.';
+      updateProviderConfigSnippet(res.token || '');
+      toast('Proxy token regenerated — update opencode.json now', 'warn');
+    } catch (err) { toast('Failed: ' + (err instanceof Error ? err.message : String(err)), 'error'); }
+  };
 
   const ntfyRow = document.getElementById('settings-ntfy');
   if (ntfyRow) {
@@ -2302,12 +2382,30 @@ async function renderSettings() {
     }
   }
 
-  $('#provider-config').value = JSON.stringify({
-    provider: {
-      'opencode-go': { options: { baseURL: proxyHost } },
-      'opencode-zen': { api: 'opencode-go', options: { baseURL: `${proxyHost}/zen` } },
-    },
-  }, null, 2);
+  function updateProviderConfigSnippet(token) {
+    const snippet = {
+      provider: {
+        'opencode-go': {
+          options: token
+            ? { baseURL: proxyHost, apiKey: token }
+            : { baseURL: proxyHost },
+        },
+        'multi-auth-zen': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'OpenCode Zen (multi-auth)',
+          options: token
+            ? { baseURL: `${proxyHost}/zen`, apiKey: token }
+            : { baseURL: `${proxyHost}/zen` },
+          models: {
+            'deepseek-v4-flash-free': {},
+            'mimo-v2.5-free': {},
+          },
+        },
+      },
+    };
+    $('#provider-config').value = JSON.stringify(snippet, null, 2);
+  }
+  updateProviderConfigSnippet(proxyToken);
 
   $('#copy-provider-config').onclick = async () => {
     try {

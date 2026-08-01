@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from 'express'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -25,12 +26,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PUBLIC_DIR = path.join(__dirname, 'public')
 
 const FETCH_TIMEOUT_MS = 8_000
-
-async function fetchJson(url: string, signal: AbortSignal): Promise<{ data?: Array<{ id?: string }> }> {
-  const res = await fetch(url, { signal })
-  if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`)
-  return res.json() as Promise<{ data?: Array<{ id?: string }> }>
-}
 
 function resolveOpenCodeConfigPath(): string {
   return process.env.OPENCODE_CONFIG
@@ -253,8 +248,8 @@ export class DashboardServer {
         const proxy = `http://127.0.0.1:${this.proxyPort}`
         const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
         const [goRes, zenRes] = await Promise.allSettled([
-          fetchJson(`${proxy}/v1/models`, signal).then(j => (j.data || []).map(m => m.id).filter(Boolean) as string[]),
-          fetchJson(`${proxy}/zen/v1/models`, signal).then(j => (j.data || []).map(m => m.id).filter(Boolean) as string[]),
+          this.proxyFetchJson(`${proxy}/v1/models`, signal),
+          this.proxyFetchJson(`${proxy}/zen/v1/models`, signal),
         ])
         res.json({
           go: goRes.status === 'fulfilled' ? goRes.value : [],
@@ -284,8 +279,8 @@ export class DashboardServer {
       let live: string[] = []
       let liveError: string | null = null
       try {
-        const json = await fetchJson(`${proxy}/zen/v1/models`, signal)
-        live = (json.data || []).map(m => m.id).filter(Boolean) as string[]
+        const json = await this.proxyFetchJson(`${proxy}/zen/v1/models`, signal)
+        live = json
       } catch (err) {
         liveError = err instanceof Error ? err.message : String(err)
       }
@@ -323,6 +318,32 @@ export class DashboardServer {
       res.json({ models })
     })
 
+    this.app.get('/api/proxy-token', (_req, res) => {
+      res.json({ token: this.configStore.get('proxyAccessToken') || '' })
+    })
+
+    this.app.post('/api/proxy-token/regenerate', (_req, res) => {
+      const token = crypto.randomBytes(24).toString('base64url')
+      this.configStore.set('proxyAccessToken', token)
+      res.json({ token })
+    })
+
+    this.app.get('/api/disabled-models', (_req, res) => {
+      const raw = this.configStore.get('disabledModels') || ''
+      const models = raw.split(',').map((s) => s.trim()).filter(Boolean)
+      res.json({ models })
+    })
+
+    this.app.put('/api/disabled-models', (req, res) => {
+      const { models } = req.body ?? {}
+      if (!Array.isArray(models)) {
+        res.status(400).json({ error: 'models must be an array' })
+        return
+      }
+      this.configStore.set('disabledModels', models.join(','))
+      res.json({ models })
+    })
+
     this.app.get('/api/notifications', (_req, res) => {
       res.json(this.notifier.getHistory())
     })
@@ -356,13 +377,7 @@ export class DashboardServer {
       }
       const start = Date.now()
       try {
-        const upstreamRes = await fetch(`http://127.0.0.1:${this.proxyPort}/v1/models`, {
-          headers: {
-            'x-api-key': key.key,
-            'Authorization': `Bearer ${key.key}`,
-          },
-          signal: AbortSignal.timeout(10000),
-        })
+        const upstreamRes = await this.proxyFetchRaw(`/v1/models`, 10000)
         const duration = Date.now() - start
         res.json({ ok: upstreamRes.ok, status: upstreamRes.status, latencyMs: duration })
       } catch (err) {
@@ -442,6 +457,29 @@ export class DashboardServer {
 
   private async persistKeys(): Promise<void> {
     await this.secureStore.saveKeys(this.keyManager.toStoredEntries())
+  }
+
+  private proxyAuthHeaders(): Record<string, string> {
+    const token = this.configStore.get('proxyAccessToken') || ''
+    if (!token) return {}
+    return { authorization: `Bearer ${token}`, 'x-api-key': token }
+  }
+
+  // Internal fetch helper for the dashboard's own calls into the proxy.
+  // The proxy enforces the access token on :18905, so every internal call
+  // (model catalogs, drift detection, key liveness test) must present it.
+  private async proxyFetchRaw(path: string, timeoutMs: number): Promise<Response> {
+    return fetch(`http://127.0.0.1:${this.proxyPort}${path}`, {
+      headers: this.proxyAuthHeaders(),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  }
+
+  private async proxyFetchJson(url: string, signal: AbortSignal): Promise<string[]> {
+    const res = await fetch(url, { headers: this.proxyAuthHeaders(), signal })
+    if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`)
+    const json = await res.json() as { data?: Array<{ id?: string }> }
+    return (json.data || []).map((m) => m.id).filter(Boolean) as string[]
   }
 
   private maskCookie(cookie: string): string {

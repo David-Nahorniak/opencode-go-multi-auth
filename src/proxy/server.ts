@@ -29,6 +29,8 @@ export interface ProxyServerConfig {
   fallbackCooldownMs: number
   keepAliveTimeoutMs: number
   headersTimeoutMs: number
+  getAccessToken: () => string
+  getDisabledModels: () => string[]
 }
 
 interface RequestPreparation {
@@ -132,7 +134,39 @@ export class ProxyServer {
       return
     }
 
+    // Client-facing access control. The proxy enforces a shared access
+    // token so that only opencode (configured with the token as the
+    // provider apiKey) can consume the pooled upstream keys. The pool's
+    // own upstream key is injected later by buildUpstreamHeaders, which
+    // strips the incoming Authorization header.
+    const accessToken = this.config.getAccessToken()
+    if (accessToken) {
+      const incomingAuth = getHeader(headers, 'authorization') ?? ''
+      const incomingXKey = getHeader(headers, 'x-api-key') ?? ''
+      const bearer = incomingAuth.toLowerCase().startsWith('bearer ')
+        ? incomingAuth.slice(7).trim()
+        : incomingAuth.trim()
+      const presented = (bearer || incomingXKey.trim())
+      const matches = presented.length === accessToken.length
+        && crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(accessToken))
+      if (!matches) {
+        res.writeHead(401, {
+          'content-type': 'application/json',
+          'www-authenticate': 'Bearer realm="opencode-go-router"',
+        })
+        res.end(JSON.stringify({ error: 'Unauthorized: invalid or missing proxy access token' }))
+        return
+      }
+    }
+
     const prepared = this.prepareRequest(body, targetPath)
+
+    const disabledModels = this.config.getDisabledModels()
+    if (prepared.model && disabledModels.includes(prepared.model)) {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: `Model "${prepared.model}" is disabled on this proxy` }))
+      return
+    }
     const cacheHeaders = extractCacheHeaders(headers)
     const sessionKey = this.sessionAffinity.extractSessionKey(headers)
     const upstreamSessionId = getHeader(headers, 'x-session-id')

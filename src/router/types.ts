@@ -89,6 +89,8 @@ export interface RouterConfig {
   strategy: RoutingStrategy
   notifyUrls: string
   visibleModels: string
+  proxyAccessToken: string
+  disabledModels: string
   requestTimeoutMs: number
   upstreamHungTimeoutMs: number
   keepAliveTimeoutMs: number
@@ -159,6 +161,8 @@ export const DEFAULT_CONFIG: RouterConfig = {
   strategy: RoutingStrategy.PRIORITY_FAILOVER,
   notifyUrls: '',
   visibleModels: '',
+  proxyAccessToken: '',
+  disabledModels: '',
   requestTimeoutMs: 0,
   upstreamHungTimeoutMs: 0,
   keepAliveTimeoutMs: 5 * 60 * 1000,
