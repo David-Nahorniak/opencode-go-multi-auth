@@ -94,9 +94,9 @@ export async function createRouter(
   // Honour both the new "notifyUrls" key and the legacy "ntfyUrl" key so a
 // previously-saved router-config.json is not silently lost. The legacy
 // key is no longer part of RouterConfig, so the raw stored object is read.
-const stored = configStore.getAll()
-const legacyNtfy = (stored as Record<string, unknown>).ntfyUrl
-mergedConfig.notifyUrls = configStore.get('notifyUrls') || (typeof legacyNtfy === 'string' ? legacyNtfy : '') || mergedConfig.notifyUrls
+const stored = configStore.getAll() as unknown as Record<string, unknown>
+const legacyNtfy = typeof stored.ntfyUrl === 'string' ? stored.ntfyUrl : ''
+mergedConfig.notifyUrls = configStore.get('notifyUrls') || legacyNtfy || mergedConfig.notifyUrls
   mergedConfig.visibleModels = configStore.get('visibleModels') || mergedConfig.visibleModels
   keyManager = new KeyManager(mergedConfig, persistRuntimeState)
   const circuitBreaker = new CircuitBreaker(mergedConfig.circuitBreakerThreshold)
