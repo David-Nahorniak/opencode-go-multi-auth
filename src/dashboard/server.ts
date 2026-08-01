@@ -468,7 +468,7 @@ export class DashboardServer {
   // Internal fetch helper for the dashboard's own calls into the proxy.
   // The proxy enforces the access token on :18905, so every internal call
   // (model catalogs, drift detection, key liveness test) must present it.
-  private async proxyFetchRaw(path: string, timeoutMs: number): Promise<Response> {
+  private async proxyFetchRaw(path: string, timeoutMs: number): Promise<globalThis.Response> {
     return fetch(`http://127.0.0.1:${this.proxyPort}${path}`, {
       headers: this.proxyAuthHeaders(),
       signal: AbortSignal.timeout(timeoutMs),
