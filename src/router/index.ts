@@ -8,7 +8,7 @@ import { createLogger, getPluginMode, logToFile } from '../logging/logger.js'
 import { SecureStore } from '../storage/secure-store.js'
 import { ConfigStore } from '../storage/config-store.js'
 import { RuntimeStateStore } from '../storage/runtime-state-store.js'
-import { NtfyNotifier } from '../notification/ntfy.js'
+import { AppriseNotifier } from '../notification/apprise.js'
 import { printSetupInstructions } from '../plugin/index.js'
 import type { RouterConfig } from './types.js'
 import { DEFAULT_CONFIG, normalizeRoutingStrategy } from './types.js'
@@ -22,7 +22,7 @@ export interface RouterInstance {
   logStream: LogStream
   configStore: ConfigStore
   secureStore: SecureStore
-  notifier: NtfyNotifier
+  notifier: AppriseNotifier
   shutdown: () => Promise<void>
 }
 
@@ -47,7 +47,11 @@ function loadEnvConfig(): Partial<RouterConfig> {
     circuitBreakerThreshold: Number(process.env.CIRCUIT_BREAKER_THRESHOLD) || DEFAULT_CONFIG.circuitBreakerThreshold,
     logLevel: process.env.LOG_LEVEL || DEFAULT_CONFIG.logLevel,
     configDir: process.env.CONFIG_DIR || DEFAULT_CONFIG.configDir,
-    ntfyUrl: process.env.NTFY_URL || DEFAULT_CONFIG.ntfyUrl,
+    // NOTIFY_URLS is preferred. NTFY_URL is kept as a deprecated fallback so
+// existing .env files keep working; note that a bare ntfy.sh topic URL is
+// NOT a valid Apprise URL (Apprise uses the ntfy:// scheme), so users
+// moving from the old ntfy.sh setup should switch to an Apprise URL.
+notifyUrls: process.env.NOTIFY_URLS || process.env.NTFY_URL || DEFAULT_CONFIG.notifyUrls,
     requestTimeoutMs: readPositiveInt(process.env.REQUEST_TIMEOUT_MS, DEFAULT_CONFIG.requestTimeoutMs),
     upstreamHungTimeoutMs: readPositiveInt(process.env.UPSTREAM_HUNG_TIMEOUT_MS, DEFAULT_CONFIG.upstreamHungTimeoutMs),
     keepAliveTimeoutMs: readPositiveInt(process.env.KEEP_ALIVE_TIMEOUT_MS, DEFAULT_CONFIG.keepAliveTimeoutMs),
@@ -87,7 +91,12 @@ export async function createRouter(
 
   logStream = new LogStream(persistRuntimeState)
   mergedConfig.strategy = normalizeRoutingStrategy(configStore.get('strategy') || mergedConfig.strategy)
-  mergedConfig.ntfyUrl = configStore.get('ntfyUrl') || mergedConfig.ntfyUrl
+  // Honour both the new "notifyUrls" key and the legacy "ntfyUrl" key so a
+// previously-saved router-config.json is not silently lost. The legacy
+// key is no longer part of RouterConfig, so the raw stored object is read.
+const stored = configStore.getAll()
+const legacyNtfy = (stored as Record<string, unknown>).ntfyUrl
+mergedConfig.notifyUrls = configStore.get('notifyUrls') || (typeof legacyNtfy === 'string' ? legacyNtfy : '') || mergedConfig.notifyUrls
   mergedConfig.visibleModels = configStore.get('visibleModels') || mergedConfig.visibleModels
   keyManager = new KeyManager(mergedConfig, persistRuntimeState)
   const circuitBreaker = new CircuitBreaker(mergedConfig.circuitBreakerThreshold)
@@ -101,11 +110,14 @@ export async function createRouter(
   logStream.load(runtimeState.logs)
   persistReady = true
 
-  const notifier = new NtfyNotifier(mergedConfig.ntfyUrl)
+const notifier = new AppriseNotifier(mergedConfig.notifyUrls)
 
-  if (notifier.enabled) {
-    logToFile('info', `NTFY notifications enabled → ${mergedConfig.ntfyUrl}`)
-  }
+if (notifier.enabled) {
+  // Intentionally log only the target count, never the URLs themselves:
+  // Apprise URLs embed credentials (telegram bot tokens, discord webhook
+  // secrets, SMTP passwords, ...) and must not be written to plaintext logs.
+  logToFile('info', `Notifications enabled via Apprise`)
+}
 
   const proxyServer = new ProxyServer(
     {

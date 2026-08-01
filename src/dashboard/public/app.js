@@ -2253,16 +2253,16 @@ async function renderSettings() {
     const input = ntfyRow.querySelector('.ntfy-input');
     const statusEl = ntfyRow.querySelector('.ntfy-status');
     const saveBtn = ntfyRow.querySelector('.ntfy-save');
-    if (input) input.value = cfg.ntfyUrl || '';
+    if (input) input.value = cfg.notifyUrls || '';
     if (statusEl) {
-      statusEl.textContent = cfg.ntfyUrl ? 'Notifications enabled' : 'Notifications disabled';
-      statusEl.style.color = cfg.ntfyUrl ? 'var(--green)' : 'var(--text-muted)';
+      statusEl.textContent = cfg.notifyUrls ? 'Notifications enabled' : 'Notifications disabled';
+      statusEl.style.color = cfg.notifyUrls ? 'var(--green)' : 'var(--text-muted)';
     }
     if (saveBtn) {
       saveBtn.onclick = async () => {
         const url = input ? input.value.trim() : '';
         try {
-          await api.setConfig({ ntfyUrl: url });
+          await api.setConfig({ notifyUrls: url });
           if (statusEl) {
             statusEl.textContent = url ? 'Notifications enabled' : 'Notifications disabled';
             statusEl.style.color = url ? 'var(--green)' : 'var(--text-muted)';

@@ -87,7 +87,7 @@ export interface RouterConfig {
   logLevel: string
   configDir: string
   strategy: RoutingStrategy
-  ntfyUrl: string
+  notifyUrls: string
   visibleModels: string
   requestTimeoutMs: number
   upstreamHungTimeoutMs: number
@@ -157,7 +157,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
   logLevel: 'info',
   configDir: '',
   strategy: RoutingStrategy.PRIORITY_FAILOVER,
-  ntfyUrl: '',
+  notifyUrls: '',
   visibleModels: '',
   requestTimeoutMs: 0,
   upstreamHungTimeoutMs: 0,

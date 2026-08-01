@@ -5,7 +5,7 @@ import type { CircuitBreaker } from '../router/circuit-breaker.js'
 import type { QuotaTracker } from '../router/quota-tracker.js'
 import { LogStream } from '../logging/log-stream.js'
 import type { AppLogger } from '../logging/logger.js'
-import { NtfyNotifier } from '../notification/ntfy.js'
+import { AppriseNotifier } from '../notification/apprise.js'
 import {
   CircuitState,
   RoutingStrategy,
@@ -92,7 +92,7 @@ export class ProxyServer {
     private logStream: LogStream,
     private logger: AppLogger,
     private getStrategy: () => RoutingStrategy,
-    private notifier: NtfyNotifier = new NtfyNotifier(),
+    private notifier: AppriseNotifier = new AppriseNotifier(),
   ) {
     this.config = config
     this.sessionAffinity = new SessionAffinityStore()

@@ -24,7 +24,7 @@ services:
       # CONFIG_DIR is baked into the image as /data; keep it consistent with the volume.
       CONFIG_DIR: "/data"
       # Optional: define any of the values from .env.example here, e.g.
-      # NTFY_URL: "https://ntfy.sh/mytopic"
+      # NOTIFY_URLS: "tgram://botToken/chatId"
       # REQUEST_TIMEOUT_MS: "0"
 
     healthcheck:

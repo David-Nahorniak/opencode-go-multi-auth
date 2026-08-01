@@ -31,6 +31,16 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 
+# Apprise powers the general-purpose notification system (Telegram, Discord,
+# ntfy, email, ...). Installed here so the container is self-contained; on a
+# bare-metal/plugin install the operator must `pip install apprise` themselves
+# (or set APPRISE_BIN). --break-system-packages is required on Debian/bookworm
+# pip; fine inside a container.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
+    && pip install --no-cache-dir --break-system-packages apprise \
+    && rm -rf /var/lib/apt/lists/* /root/.cache/pip
+
 # The proxy and dashboard ports (overridable via env at runtime).
 EXPOSE 18904 18905
 

@@ -71,7 +71,7 @@ Click any screenshot to view full resolution.
 - **Cache-Preserving Header Passthrough** — Forwards `X-Session-Id`, `prompt_cache_key` / `prompt-cache-key`, `cache_control` / `cache-control`, plus both bearer and `x-api-key` auth for broader model compatibility.
 - **Local Web UI Control Room** — Strategy explainer, key deck with inline editing, live usage ledger, quota-error panel, routing tape with per-request route reasons and session IDs, model catalog with visibility controls, and a drift detection banner.
 - **Secure Key Storage** — AES-256-GCM encrypted at rest using PBKDF2-derived key from machine identity.
-- **Push Notifications** — Optional ntfy notifications for key exhaustion, all-keys-exhausted, and circuit-breaker trips/recovery. Configurable from the dashboard Settings page with hot-reload.
+- **Push Notifications** — Optional Apprise notifications for key exhaustion, all-keys-exhausted, and circuit-breaker trips/recovery (Telegram, Discord, ntfy, email, …). Configurable from the dashboard Settings page with hot-reload.
 - **Auto-Starting OpenCode Plugin** — Install as an OpenCode plugin so the proxy and dashboard start with OpenCode automatically.
 - **Standalone or Library** — Keep a CLI/server mode for debugging, fallback use, or external automation.
 
@@ -259,7 +259,7 @@ The dashboard is organized into seven pages:
 4. **Tokens** — Per-model and per-key time series, category share, observed cost, and 30-day rolling usage.
 5. **Logs** — Virtualized table of every routed request, with the latest entry at the top. Search across path / model / key / route reason, filter by level / "Quota only" / provider (Go / Zen / All), pause auto-scroll, paginate for long histories, right-click to copy fields, click a row to see the full metadata.
 6. **Models** — Browse the combined model catalog from both upstreams. Select which models show in the token charts. A drift banner lists free Zen models the upstream offers that are not in your `opencode.json` and provides a "Copy snippet" button to paste them in.
-7. **Settings** — Active config (ports, strategy, total tokens observed, total observed cost, quota errors caught), the notification URL (ntfy.sh), the notification log, and the provider config snippet to copy into `~/.config/opencode/opencode.json`.
+7. **Settings** — Active config (ports, strategy, total tokens observed, total observed cost, quota errors caught), the Apprise notification URL(s), the notification log, and the provider config snippet to copy into `~/.config/opencode/opencode.json`.
 
 ## Configuration
 
@@ -276,7 +276,9 @@ Set these in your shell or service file. The app reads from `process.env` — it
 | `CIRCUIT_BREAKER_THRESHOLD` | `3` | Consecutive 5xx errors before tripping |
 | `LOG_LEVEL` | `info` | Log level: `error`, `warn`, `info`, `debug` |
 | `CONFIG_DIR` | `~/.opencode` | Directory for config, encrypted key storage, and usage data |
-| `NTFY_URL` | — | Optional ntfy URL for push notifications (e.g., `https://ntfy.sh/mytopic`). Leave empty to disable. |
+| `NTFY_URL` | — | **Deprecated** alias for `NOTIFY_URLS`. Note a bare `https://ntfy.sh/mytopic` URL is not valid Apprise syntax — use `ntfy://ntfy.sh/mytopic` under `NOTIFY_URLS` instead. |
+| `NOTIFY_URLS` | — | One or more Apprise URLs (Telegram, Discord, ntfy, email, …) separated by spaces, commas, or new lines. Leave empty to disable. The bundled Docker image installs `apprise`; on bare-metal/plugin installs run `pip install apprise` (or set `APPRISE_BIN`). |
+| `APPRISE_BIN` | `apprise` | Override the apprise executable path (e.g. a venv/pipx prefix) when running outside Docker. |
 | `REQUEST_TIMEOUT_MS` | `0` | Wall-clock cap on the upstream HTTP round-trip in ms. `0` = disabled, matching OpenCode's no-timeout default for the opencode-go provider. |
 | `UPSTREAM_HUNG_TIMEOUT_MS` | `0` | Safety net that aborts the upstream fetch if no response is received at all within this window. `0` = disabled. Cleared as soon as the upstream starts sending bytes. |
 
@@ -327,14 +329,24 @@ Both are configurable via environment variables.
 
 ## Push Notifications
 
-Optional push notifications via [ntfy](https://ntfy.sh/) are sent when critical events happen.
+Optional push notifications via [Apprise](https://github.com/caronc/apprise) are sent when critical events happen. Apprise supports 100+ services from a single URL syntax — Telegram (`tgram://`), Discord (`discord://`), ntfy (`ntfy://`), email (`mailto://`), Slack, Gotify, and many more.
 
-Set the `NTFY_URL` environment variable to enable:
+Set the `NOTIFY_URLS` environment variable (one or more Apprise URLs separated by spaces, commas, or new lines) to enable:
 
 ```bash
-export NTFY_URL=https://ntfy.sh/mytopic
+export NOTIFY_URLS="tgram://botToken/chatId ntfy://ntfy.sh/mytopic"
 npm start
 ```
+
+The bundled **Docker image** ships with the `apprise` binary pre-installed, so notifications work out of the box. When running bare-metal / as an OpenCode plugin, install it on the host:
+
+```bash
+pip install apprise        # or: pipx install apprise
+```
+
+You can override the executable path with `APPRISE_BIN` if it lives in a venv/pipx prefix. URLs are never logged (they embed secrets such as bot tokens); only the enabled/disabled state is.
+
+**Migrating from the old `NTFY_URL` / ntfy.sh setup:** a bare `https://ntfy.sh/mytopic` URL is *not* a valid Apprise URL — Apprise uses the `ntfy://` scheme (e.g. `ntfy://ntfy.sh/mytopic`). Replace your `NTFY_URL` value with its Apprise equivalent under `NOTIFY_URLS`. For backward compatibility a saved `ntfyUrl` in `router-config.json` is still read, but a plain ntfy.sh topic URL won't deliver until re-entered in Apprise syntax via the dashboard.
 
 | Event | Priority | Trigger |
 |---|---|---|

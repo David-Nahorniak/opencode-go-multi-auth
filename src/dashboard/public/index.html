@@ -357,10 +357,10 @@
           </div>
           <div class="card-body">
             <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
-              Set an <a href="https://ntfy.sh" target="_blank" rel="noopener" style="color: var(--accent);">ntfy.sh</a> topic URL to receive push notifications when keys are exhausted or circuit breakers trip. Updated instantly — no restart needed.
+              Set one or more <a href="https://github.com/caronc/apprise" target="_blank" rel="noopener" style="color: var(--accent);">Apprise</a> URLs to receive push notifications (Telegram, Discord, ntfy, email, …) when keys are exhausted or circuit breakers trip. Separate multiple URLs with spaces, commas, or new lines. Updated instantly — no restart needed.
             </p>
             <div style="display: flex; gap: 8px; align-items: center;">
-              <input class="input input-mono ntfy-input" type="text" placeholder="https://ntfy.sh/mytopic" style="flex: 1;" autocomplete="off">
+              <input class="input input-mono ntfy-input" type="text" placeholder="tgram://bot:token/chat  ntfy://ntfy.sh/mytopic" style="flex: 1;" autocomplete="off">
               <button class="btn btn-primary ntfy-save">Save</button>
             </div>
           </div>
