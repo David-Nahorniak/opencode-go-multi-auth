@@ -1524,57 +1524,63 @@ input, select, textarea {
 .notif-title { color: var(--text); font-weight: 600; }
 .notif-msg { grid-column: 1 / -1; color: var(--text-secondary); font-size: 11px; }
 
-/* Go plan page */
-.go-plan-config-row {
+/* Go plan usage (rendered per-account) */
+.modal-divider { height: 1px; background: var(--border); margin: 14px 0 10px; }
+.modal-subhead { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.modal-hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; line-height: 1.5; }
+.modal-hint code { font-family: var(--font-mono); }
+
+.gousage-section {
+  grid-column: 1 / -1;
+  border-top: 1px dashed var(--border);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.gousage-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 8px;
   flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
 }
-.go-plan-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 240px; }
-.go-plan-field > span { font-size: 12px; color: var(--text-secondary); }
-.go-plan-window {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
-}
-.go-plan-window-card {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 18px;
-  background: var(--bg-elev-1);
-}
-.go-plan-window-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-.go-plan-window-label { font-size: 13px; font-weight: 600; color: var(--text); }
-.go-plan-window-reset { font-size: 12px; color: var(--text-secondary); }
-.go-plan-bar {
-  position: relative;
-  height: 10px;
-  border-radius: 6px;
-  background: var(--bg-elev-3, var(--bg-hover, #2a2a2e));
-  overflow: hidden;
-}
-.go-plan-bar-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 6px;
-  transition: width 0.4s ease;
-}
-.go-plan-bar-fill.is-warn { background: var(--yellow); }
-.go-plan-bar-fill.is-crit { background: var(--red); }
-.go-plan-bar-fill.is-ok { background: var(--green); }
-.go-plan-window-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-top: 8px;
+.gousage-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.gousage-actions { display: flex; gap: 6px; align-items: center; }
+.gousage-windows { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.gousage-window-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg-elev-1); }
+.gousage-window-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.gousage-window-label { font-size: 11px; font-weight: 600; color: var(--text); }
+.gousage-window-reset { font-size: 11px; color: var(--text-secondary); }
+.gousage-bar { position: relative; height: 8px; border-radius: 5px; background: var(--bg-elev-3); overflow: hidden; }
+.gousage-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; transition: width 0.4s ease; }
+.gousage-bar-fill.is-warn { background: var(--yellow); }
+.gousage-bar-fill.is-crit { background: var(--red); }
+.gousage-bar-fill.is-ok { background: var(--green); }
+.gousage-window-foot { display: flex; justify-content: space-between; align-items: baseline; margin-top: 5px; font-size: 11px; }
+.gousage-pct { font-size: 14px; font-weight: 600; color: var(--text); }
+.gousage-remaining { color: var(--text-secondary); }
+.gousage-reset-abs { color: var(--text-muted); font-size: 10px; }
+.gousage-creds { font-size: 11px; color: var(--text-muted); }
+.gousage-expired {
+  border: 1px solid var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 12px;
+  color: var(--text);
 }
-.go-plan-pct { font-size: 18px; font-weight: 600; color: var(--text); }
-.go-plan-remaining { color: var(--text-secondary); }
-.go-plan-reset-abs { color: var(--text-muted); font-size: 11px; }
+.gousage-expired strong { color: var(--red); }
+.gousage-creds-popover {
+  position: absolute;
+  z-index: 50;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+}
+.gousage-creds-popover .input { font-size: 12px; }

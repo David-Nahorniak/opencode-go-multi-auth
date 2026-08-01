@@ -71,6 +71,8 @@ export class KeyManager {
       lastStatusCode: null,
       lastModel: null,
       lastSessionId: null,
+      goUsageWorkspaceId: this.normalizeString(options?.goUsageWorkspaceId),
+      goUsageAuthCookie: this.normalizeString(options?.goUsageAuthCookie),
     }
     this.keys.push(entry)
     this.sortKeys()
@@ -147,6 +149,19 @@ export class KeyManager {
     const trimmed = newKey.trim()
     if (!trimmed) return null
     key.key = trimmed
+    this.onChange?.()
+    return key
+  }
+
+  setGoUsageCreds(id: string, updates: Partial<Pick<ApiKey, 'goUsageWorkspaceId' | 'goUsageAuthCookie'>>): ApiKey | null {
+    const key = this.getKeyById(id)
+    if (!key) return null
+    if ('goUsageWorkspaceId' in updates) {
+      key.goUsageWorkspaceId = typeof updates.goUsageWorkspaceId === 'string' ? updates.goUsageWorkspaceId.trim() : key.goUsageWorkspaceId
+    }
+    if ('goUsageAuthCookie' in updates) {
+      key.goUsageAuthCookie = typeof updates.goUsageAuthCookie === 'string' ? updates.goUsageAuthCookie.trim() : key.goUsageAuthCookie
+    }
     this.onChange?.()
     return key
   }
@@ -283,6 +298,8 @@ export class KeyManager {
       enabled: key.enabled,
       priority: key.priority,
       weight: key.weight,
+      ...(key.goUsageWorkspaceId ? { goUsageWorkspaceId: key.goUsageWorkspaceId } : {}),
+      ...(key.goUsageAuthCookie ? { goUsageAuthCookie: key.goUsageAuthCookie } : {}),
     }))
   }
 
@@ -350,6 +367,10 @@ export class KeyManager {
   private normalizeNumber(value?: number): number {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 0
     return value
+  }
+
+  private normalizeString(value?: unknown): string {
+    return typeof value === 'string' ? value.trim() : ''
   }
 
   private normalizeStatus(value?: string): KeyStatus {

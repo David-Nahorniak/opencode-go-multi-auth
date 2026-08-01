@@ -125,9 +125,8 @@ const api = {
   notifications() { return this.req('/api/notifications'); },
   testKey(id) { return this.req(`/api/keys/${id}/test`, { method: 'POST' }); },
   recentLogs() { return this.req('/api/logs'); },
-  goUsage() { return this.req('/api/go-usage'); },
-  goUsageConfig() { return this.req('/api/go-usage-config'); },
-  setGoUsageConfig(payload) { return this.req('/api/go-usage-config', { method: 'PUT', body: payload }); },
+  keyUsage(id) { return this.req(`/api/keys/${id}/usage`); },
+  updateAllUsages() { return this.req('/api/keys/update-all-usages', { method: 'POST' }); },
 };
 
 // ---------------------------------------------------------------------------
@@ -151,10 +150,8 @@ const state = {
   zenProviderName: 'multi-auth-zen', // opencode.json provider name for drift detection
   zenDriftAnnounced: null, // last drift signature announced via toast (per session)
   zenDriftTimer: null,      // setTimeout handle for 12h re-check
-  goUsage: null,            // last OpenCode Go usage scrape result
-  goUsageConfig: null,      // { workspaceId, authCookieMasked, configured }
-  goPlanTimer: null,        // 60s usage poll interval while the page is open
-  goPlanBusy: false,
+  goUsageByKey: {},         // id -> { success, rolling?, weekly?, monthly?, cookieExpired?, error?, fetchedAt }
+  goUsageBusy: {},          // id -> true while fetching usage
 };
 
 // ---------------------------------------------------------------------------
@@ -176,10 +173,6 @@ function setPage(page) {
       state.zenDriftTimer = null;
     }
   }
-  if (page !== 'go-plan' && state.goPlanTimer) {
-    clearInterval(state.goPlanTimer);
-    state.goPlanTimer = null;
-  }
   state.currentPage = page;
   $$('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.page === page));
   $$('.page').forEach((el) => el.classList.toggle('active', el.dataset.page === page));
@@ -190,7 +183,6 @@ function setPage(page) {
   if (page === 'tokens') renderTokens();
   if (page === 'models') renderModels();
   if (page === 'settings') renderSettings();
-  if (page === 'go-plan') renderGoPlan();
 }
 
 function initRouting() {
@@ -209,7 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTokensPage();
   initLogsToolbar();
   initSearch();
-  initGoPlan();
+  initAccounts();
   connectWebSocket();
   await refreshAll();
   await backfillLogs();
@@ -365,6 +357,8 @@ function initModal() {
     $('#key-value-input').value = '';
     $('#key-priority-input').value = String((state.keys[state.keys.length - 1]?.priority ?? 0) + 1);
     $('#key-weight-input').value = '1';
+    $('#key-go-workspace-input').value = '';
+    $('#key-go-cookie-input').value = '';
     overlay.classList.add('active');
     setTimeout(() => $('#key-alias-input').focus(), 50);
   });
@@ -384,9 +378,14 @@ async function saveNewKey() {
   const key = $('#key-value-input').value.trim();
   const priority = Number($('#key-priority-input').value || '1');
   const weight = Number($('#key-weight-input').value || '1');
+  const goUsageWorkspaceId = $('#key-go-workspace-input').value.trim();
+  const goUsageAuthCookie = $('#key-go-cookie-input').value.trim();
   if (!key) { toast('API key is required', 'error'); return; }
   try {
-    await api.addKey({ key, alias: alias || undefined, priority, weight });
+    const payload = { key, alias: alias || undefined, priority, weight };
+    if (goUsageWorkspaceId) payload.goUsageWorkspaceId = goUsageWorkspaceId;
+    if (goUsageAuthCookie) payload.goUsageAuthCookie = goUsageAuthCookie;
+    await api.addKey(payload);
     toast('Key added', 'success');
     closeModal();
     await refreshKeys();
@@ -894,6 +893,7 @@ function renderAccountCard(key) {
           <button class="btn btn-sm btn-danger" data-action="remove" data-id="${key.id}">Remove</button>
         </div>
       </div>
+      ${renderAccountUsage(key)}
     </article>
   `;
 }
@@ -994,6 +994,16 @@ function initAccountCardHandlers(host) {
   // Replace-key popover
   $$('button[data-action="reveal"]', host).forEach((btn) => {
     btn.addEventListener('click', (e) => openReplacePopover(btn, e));
+  });
+
+  // Refresh per-account Go plan usage
+  $$('button[data-action="usage-refresh"]', host).forEach((el) => {
+    el.addEventListener('click', () => refreshKeyUsage(el.dataset.id));
+  });
+
+  // Edit workspace + auth cookie for an account
+  $$('button[data-action="creds-edit"]', host).forEach((btn) => {
+    btn.addEventListener('click', () => openCredsPopover(btn, btn.dataset.id));
   });
 
   // Drag-and-drop reordering
@@ -2315,10 +2325,8 @@ async function renderSettings() {
 on('settings:first-visit', renderSettings);
 
 // ---------------------------------------------------------------------------
-// Go plan — rolling / weekly / monthly usage scraped from opencode.ai
+// Go plan usage — rolling / weekly / monthly, scraped per-account from opencode.ai
 // ---------------------------------------------------------------------------
-
-const goPlanRefreshBtn = () => $('#go-plan-refresh');
 
 function fmtSecDuration(sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0));
@@ -2332,143 +2340,171 @@ function fmtSecDuration(sec) {
   return `${s}s`;
 }
 
-function goPlanBarClass(pct) {
+function gousageBarClass(pct) {
   if (pct >= 80) return 'is-crit';
   if (pct >= 50) return 'is-warn';
   return 'is-ok';
 }
 
-function renderGoPlanWindow(name, label, data) {
-  const pct = Number(data?.usagePercent ?? 0);
-  const rem = 100 - pct;
+function renderGoUsageWindow(label, data) {
+  const pct = Math.min(100, Math.max(0, Number(data?.usagePercent ?? 0)));
+  const rem = (100 - pct).toFixed(1);
   return `
-    <div class="go-plan-window-card">
-      <div class="go-plan-window-head">
-        <span class="go-plan-window-label">${escapeHtml(label)}</span>
-        <span class="go-plan-window-reset">Resets in ${escapeHtml(fmtSecDuration(data?.resetInSec))}</span>
+    <div class="gousage-window-card">
+      <div class="gousage-window-head">
+        <span class="gousage-window-label">${escapeHtml(label)}</span>
+        <span class="gousage-window-reset">resets ${escapeHtml(fmtSecDuration(data?.resetInSec))}</span>
       </div>
-      <div class="go-plan-bar"><div class="go-plan-bar-fill ${goPlanBarClass(pct)}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div></div>
-      <div class="go-plan-window-foot">
-        <span class="go-plan-pct">${pct.toFixed(1)}% used</span>
-        <span class="go-plan-remaining">${rem.toFixed(1)}% remaining</span>
-        <span class="go-plan-reset-abs">reset ${escapeHtml(fmtDateTime(data?.resetTimeIso))}</span>
-      </div>
-    </div>`;
-}
-
-async function renderGoPlan() {
-  const body = $('#go-plan-body');
-  const meta = $('#go-plan-config-meta');
-  if (!body) return;
-
-  try {
-    state.goUsageConfig = await api.goUsageConfig();
-  } catch (err) {
-    state.goUsageConfig = null;
-  }
-  const cfg = state.goUsageConfig;
-  const wsInput = $('#go-plan-workspace');
-  const cookieMask = $('#go-plan-cookie-mask');
-  if (wsInput && cfg) wsInput.value = cfg.workspaceId || '';
-  if (cookieMask && cfg) cookieMask.textContent = cfg.authCookieMasked ? `(stored: ${cfg.authCookieMasked})` : '';
-  if (meta) meta.textContent = cfg?.configured ? 'Configured' : 'Not configured yet';
-
-  if (!cfg?.configured) {
-    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Fill in your workspace credentials above to start pulling Go plan usage.</div></div></div>`;
-    return;
-  }
-
-  if (state.goPlanBusy) return;
-  state.goPlanBusy = true;
-
-  body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Scraping workspace dashboard…</div></div></div>`;
-
-  try {
-    state.goUsage = await api.goUsage();
-  } catch (err) {
-    state.goUsage = { success: false, error: err instanceof Error ? err.message : String(err), fetchedAt: Date.now() };
-  }
-  state.goPlanBusy = false;
-  renderGoPlanBody();
-
-  if (!state.goPlanTimer) {
-    state.goPlanTimer = setInterval(async () => {
-      if (state.currentPage !== 'go-plan') return;
-      try { state.goUsage = await api.goUsage(); } catch {}
-      renderGoPlanBody();
-    }, 60_000);
-  }
-}
-
-function renderGoPlanBody() {
-  const body = $('#go-plan-body');
-  if (!body) return;
-  const data = state.goUsage;
-  if (!data) return;
-
-  if (!data.success) {
-    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">${escapeHtml(data.error || 'Failed to fetch Go plan usage')}</div></div></div>`;
-    return;
-  }
-
-  const windows = [];
-  if (data.rolling) windows.push(renderGoPlanWindow('rolling', 'Rolling usage (5h)', data.rolling));
-  if (data.weekly) windows.push(renderGoPlanWindow('weekly', 'Weekly usage', data.weekly));
-  if (data.monthly) windows.push(renderGoPlanWindow('monthly', 'Monthly usage', data.monthly));
-
-  if (!windows.length) {
-    body.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">Dashboard parsed but no usage windows were found.</div></div></div>`;
-    return;
-  }
-
-  const fetched = fmtDateTime(new Date(data.fetchedAt || Date.now()).toISOString());
-  body.innerHTML = `
-    <div class="card">
-      <div class="card-head">
-        <h3>Plan usage</h3>
-        <span class="panel-meta">Last updated ${escapeHtml(fetched)} · auto-refresh 60s</span>
-      </div>
-      <div class="card-body">
-        <div class="go-plan-window">${windows.join('')}</div>
+      <div class="gousage-bar"><div class="gousage-bar-fill ${gousageBarClass(pct)}" style="width:${pct.toFixed(1)}%"></div></div>
+      <div class="gousage-window-foot">
+        <span class="gousage-pct">${pct.toFixed(1)}%</span>
+        <span class="gousage-remaining">${rem}% left</span>
+        <span class="gousage-reset-abs">${escapeHtml(fmtDateTime(data?.resetTimeIso))}</span>
       </div>
     </div>`;
 }
 
-function initGoPlan() {
-  const refresh = () => { if (state.currentPage === 'go-plan') renderGoPlan(); };
-  const btn = goPlanRefreshBtn();
-  if (btn) btn.addEventListener('click', refresh);
+// Renders the per-account Go plan usage block. Hidden entirely when the
+// account has no workspace + auth cookie configured. When the cookie has
+// expired (or the scrape failed with an auth error) it shows a renewal
+// notice instead of the bars.
+function renderAccountUsage(key) {
+  if (!key.goUsageConfigured) return '';
 
-  const save = $('#go-plan-save');
-  if (save) {
-    save.addEventListener('click', async () => {
-      const workspaceId = ($('#go-plan-workspace')?.value || '').trim();
-      const authCookie = ($('#go-plan-cookie')?.value || '').trim();
-      const payload = {};
-      if (workspaceId) payload.workspaceId = workspaceId;
-      if (authCookie) payload.authCookie = authCookie;
-      if (!Object.keys(payload).length) { toast('Enter a workspace ID or auth cookie first', 'error'); return; }
-      try {
-        await api.setGoUsageConfig(payload);
-        toast('Go plan credentials saved', 'success');
-        ($('#go-plan-cookie') || {}).value = '';
-        await renderGoPlan();
-      } catch (err) {
-        toast('Failed to save: ' + (err instanceof Error ? err.message : String(err)), 'error');
-      }
-    });
+  const data = state.goUsageByKey[key.id];
+  const credsLine = `<span class="gousage-creds">workspace <code>${escapeHtml(key.goUsageWorkspaceId || '—')}</code>${key.goUsageMaskedCookie ? ` · cookie ${escapeHtml(key.goUsageMaskedCookie)}` : ''}</span>`;
+  const actions = `
+    <div class="gousage-actions">
+      ${data && !state.goUsageBusy[key.id] ? `<span class="panel-meta">updated ${escapeHtml(fmtDateTime(new Date(data.fetchedAt || Date.now()).toISOString()))}</span>` : ''}
+      <button class="btn btn-sm" data-action="usage-refresh" data-id="${key.id}">Refresh usage</button>
+      <button class="btn btn-sm" data-action="creds-edit" data-id="${key.id}">Cookie / workspace</button>
+    </div>`;
+
+  let body;
+  if (state.goUsageBusy[key.id]) {
+    body = `<div class="empty-state" style="padding:10px;">Scraping workspace dashboard…</div>`;
+  } else if (!data) {
+    body = `<div class="empty-state" style="padding:10px;">Click “Refresh usage” to pull rolling / weekly / monthly usage.</div>`;
+  } else if (!data.success && data.cookieExpired) {
+    body = `
+      <div class="gousage-expired">
+        <strong>Auth cookie expired or invalid.</strong> The workspace dashboard could not be read.
+        Open opencode.ai, copy the fresh <code>auth</code> cookie (DevTools → Cookies) and update it via “Cookie / workspace”.
+        ${data.error ? `<div style="margin-top:4px; color: var(--text-muted);">${escapeHtml(data.error)}</div>` : ''}
+      </div>`;
+  } else if (!data.success) {
+    body = `<div class="empty-state" style="padding:10px; color: var(--text-muted);">${escapeHtml(data.error || 'Failed to fetch Go plan usage')}</div>`;
+  } else {
+    const wins = [];
+    if (data.rolling) wins.push(renderGoUsageWindow('Rolling (5h)', data.rolling));
+    if (data.weekly) wins.push(renderGoUsageWindow('Weekly', data.weekly));
+    if (data.monthly) wins.push(renderGoUsageWindow('Monthly', data.monthly));
+    body = wins.length
+      ? `<div class="gousage-windows">${wins.join('')}</div>`
+      : `<div class="empty-state" style="padding:10px;">Dashboard parsed but no usage windows were found.</div>`;
   }
 
-  const clear = $('#go-plan-clear');
-  if (clear) {
-    clear.addEventListener('click', async () => {
-      try {
-        await api.setGoUsageConfig({ workspaceId: '', authCookie: '' });
-        toast('Go plan credentials cleared', 'success');
-        await renderGoPlan();
-      } catch (err) {
-        toast('Failed to clear: ' + (err instanceof Error ? err.message : String(err)), 'error');
-      }
-    });
+  return `
+    <div class="gousage-section">
+      <div class="gousage-head">
+        <span class="gousage-title">OpenCode Go plan usage</span>
+        ${actions}
+      </div>
+      ${body}
+      <div style="margin-top:6px;">${credsLine}</div>
+    </div>`;
+}
+
+async function refreshKeyUsage(id, { silent = false } = {}) {
+  if (state.goUsageBusy[id]) return;
+  state.goUsageBusy[id] = true;
+  if (state.currentPage === 'accounts') renderAccounts();
+  try {
+    state.goUsageByKey[id] = await api.keyUsage(id);
+  } catch (err) {
+    state.goUsageByKey[id] = { success: false, error: err instanceof Error ? err.message : String(err), fetchedAt: Date.now() };
+  } finally {
+    delete state.goUsageBusy[id];
+    if (state.currentPage === 'accounts') renderAccounts();
   }
+}
+
+async function updateAllUsages() {
+  const configured = state.keys.filter((k) => k.goUsageConfigured);
+  if (!configured.length) { toast('No accounts have workspace + auth cookie set', 'info'); return; }
+  const btn = $('#update-all-usages-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+  try {
+    const { results } = await api.updateAllUsages();
+    for (const [id, r] of Object.entries(results || {})) state.goUsageByKey[id] = r;
+    const expired = configured.filter((k) => state.goUsageByKey[k.id]?.cookieExpired);
+    if (expired.length) toast(`${expired.length} account(s) have an expired auth cookie`, 'error', 5000);
+    else toast('Updated Go plan usage for all configured accounts', 'success');
+  } catch (err) {
+    toast('Failed to update usages: ' + (err instanceof Error ? err.message : String(err)), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Update all usages'; }
+    if (state.currentPage === 'accounts') renderAccounts();
+  }
+}
+
+function openCredsPopover(anchor, id) {
+  closeAllPopovers();
+  const key = state.keys.find((k) => k.id === id);
+  const pop = document.createElement('div');
+  pop.className = 'gousage-creds-popover';
+  pop.innerHTML = `
+    <div style="font-size:12px; color: var(--text-muted);">OpenCode.ai workspace credentials for this account. Leave cookie empty to keep the stored one.</div>
+    <label style="display:flex; flex-direction:column; gap:3px;">
+      <span style="font-size:11px;">Workspace ID</span>
+      <input class="input input-mono" data-field="workspace" type="text" placeholder="ws_…" value="${escapeHtml(key?.goUsageWorkspaceId || '')}">
+    </label>
+    <label style="display:flex; flex-direction:column; gap:3px;">
+      <span style="font-size:11px;">Auth cookie ${key?.goUsageMaskedCookie ? `(stored: ${escapeHtml(key.goUsageMaskedCookie)})` : ''}</span>
+      <input class="input input-mono" data-field="cookie" type="password" placeholder="new auth cookie value" autocomplete="off">
+    </label>
+    <div style="display:flex; justify-content:flex-end; gap:6px;">
+      <button class="btn btn-sm" data-popover="cancel">Cancel</button>
+      <button class="btn btn-sm" data-popover="clear" title="Remove workspace + cookie">Clear</button>
+      <button class="btn btn-sm btn-primary" data-popover="save">Save</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const rect = anchor.getBoundingClientRect();
+  pop.style.position = 'absolute';
+  pop.style.top = (window.scrollY + rect.bottom + 4) + 'px';
+  pop.style.left = (window.scrollX + rect.left) + 'px';
+  setTimeout(() => pop.querySelector('[data-field="workspace"]')?.focus(), 30);
+
+  const cleanup = () => pop.remove();
+  pop.querySelector('[data-popover="cancel"]').addEventListener('click', cleanup);
+  pop.querySelector('[data-popover="clear"]').addEventListener('click', async () => {
+    try { await api.updateKey(id, { goUsageWorkspaceId: '', goUsageAuthCookie: '' }); cleanup(); toast('Credentials cleared', 'success'); await refreshKeys(); if (state.currentPage === 'accounts') renderAccounts(); }
+    catch (err) { toast(err.message || 'Failed', 'error'); }
+  });
+  pop.querySelector('[data-popover="save"]').addEventListener('click', async () => {
+    const ws = pop.querySelector('[data-field="workspace"]').value.trim();
+    const cookie = pop.querySelector('[data-field="cookie"]').value.trim();
+    const payload = {};
+    if (ws !== (key?.goUsageWorkspaceId || '')) payload.goUsageWorkspaceId = ws;
+    if (cookie) payload.goUsageAuthCookie = cookie;
+    if (!Object.keys(payload).length) { toast('No changes', 'info'); cleanup(); return; }
+    try {
+      await api.updateKey(id, payload);
+      cleanup();
+      toast('Credentials saved', 'success');
+      await refreshKeys();
+      if (state.currentPage === 'accounts') renderAccounts();
+      if (payload.goUsageAuthCookie || payload.goUsageWorkspaceId) refreshKeyUsage(id);
+    } catch (err) {
+      toast(err.message || 'Failed to save', 'error');
+    }
+  });
+  document.addEventListener('click', function onDoc(ev) {
+    if (!pop.contains(ev.target) && ev.target !== anchor) { cleanup(); document.removeEventListener('click', onDoc); }
+  }, { capture: true });
+}
+
+function initAccounts() {
+  const btn = $('#update-all-usages-btn');
+  if (btn) btn.addEventListener('click', updateAllUsages);
 }

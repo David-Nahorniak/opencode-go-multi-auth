@@ -47,10 +47,6 @@
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="6" y="11" width="3" height="7"/><rect x="11" y="7" width="3" height="11"/><rect x="16" y="13" width="3" height="5"/></svg>
           <span>Tokens</span>
         </button>
-        <button class="nav-item" data-page="go-plan">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
-          <span>Go plan</span>
-        </button>
         <button class="nav-item" data-page="logs">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           <span>Logs</span>
@@ -139,6 +135,7 @@
             <p class="page-subtitle">Drag to reorder priority. Click an alias to rename. Click the masked key to replace it.</p>
           </div>
           <div class="page-actions">
+            <button class="btn" id="update-all-usages-btn" title="Scrape rolling/weekly/monthly Go plan usage for every account that has workspace + auth cookie set">↻ Update all usages</button>
             <button class="btn btn-primary" id="add-key-btn">+ Add key</button>
           </div>
         </div>
@@ -220,45 +217,6 @@
         <p class="panel-note" id="tokens-data-note" style="margin-top: 16px;">
           Note: this page is derived from the live log buffer (500 recent + 10,000 archived entries). Anything older than the buffer is not shown.
         </p>
-      </section>
-
-      <!-- GO PLAN -->
-      <section class="page" data-page="go-plan">
-        <div class="page-header">
-          <div>
-            <h1 class="page-title">Go plan</h1>
-            <p class="page-subtitle">Rolling / weekly / monthly usage and reset countdown, scraped from the opencode.ai workspace dashboard.</p>
-          </div>
-          <div class="page-actions">
-            <button class="btn" id="go-plan-refresh">Refresh</button>
-          </div>
-        </div>
-
-        <div class="card" id="go-plan-config-card">
-          <div class="card-head">
-            <h3>Connect your workspace</h3>
-            <span class="panel-meta" id="go-plan-config-meta"></span>
-          </div>
-          <div class="card-body">
-            <p style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px;">
-              The usage dashboard has no public API (yet — see <a href="https://github.com/anomalyco/opencode/issues/16017" target="_blank" rel="noopener" style="color: var(--accent);">anomalyco/opencode#16017</a>), so the router scrapes your opencode.ai workspace page using a session cookie. Provide your <strong>workspace ID</strong> (the segment in the workspace URL) and the <strong>auth</strong> cookie (browser DevTools → Storage → Cookies for <code style="font-family: var(--font-mono);">opencode.ai</code>).
-            </p>
-            <div class="go-plan-config-row">
-              <label class="go-plan-field">
-                <span>Workspace ID</span>
-                <input class="input input-mono" id="go-plan-workspace" type="text" placeholder="e.g. ws_abc123" autocomplete="off">
-              </label>
-              <label class="go-plan-field">
-                <span>Auth cookie <span id="go-plan-cookie-mask" class="panel-meta"></span></span>
-                <input class="input input-mono" id="go-plan-cookie" type="password" placeholder="auth cookie value" autocomplete="off">
-              </label>
-              <button class="btn btn-primary" id="go-plan-save">Save</button>
-              <button class="btn" id="go-plan-clear">Clear</button>
-            </div>
-          </div>
-        </div>
-
-        <div id="go-plan-body" style="margin-top: 16px;"></div>
       </section>
 
       <!-- LOGS -->
@@ -459,6 +417,19 @@
           <label>
             Weight
             <input class="input" type="number" min="1" id="key-weight-input" value="1">
+          </label>
+        </div>
+        <div class="modal-divider"></div>
+        <div class="modal-subhead">OpenCode Go plan usage (optional)</div>
+        <p class="modal-hint">Scrape rolling / weekly / monthly usage + reset from the opencode.ai workspace dashboard. Needs the workspace ID (in the workspace URL) and the <code>auth</code> cookie (browser DevTools → Cookies for opencode.ai). Leave empty to hide usage for this account.</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <label>
+            Workspace ID
+            <input class="input input-mono" id="key-go-workspace-input" type="text" placeholder="ws_…" autocomplete="off">
+          </label>
+          <label>
+            Auth cookie
+            <input class="input input-mono" id="key-go-cookie-input" type="password" placeholder="auth cookie value" autocomplete="off">
           </label>
         </div>
       </div>

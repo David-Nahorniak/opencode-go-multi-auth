@@ -52,10 +52,6 @@ function loadEnvConfig(): Partial<RouterConfig> {
     upstreamHungTimeoutMs: readPositiveInt(process.env.UPSTREAM_HUNG_TIMEOUT_MS, DEFAULT_CONFIG.upstreamHungTimeoutMs),
     keepAliveTimeoutMs: readPositiveInt(process.env.KEEP_ALIVE_TIMEOUT_MS, DEFAULT_CONFIG.keepAliveTimeoutMs),
     headersTimeoutMs: readPositiveInt(process.env.HEADERS_TIMEOUT_MS, DEFAULT_CONFIG.headersTimeoutMs),
-    // OpenCode Go usage scraping creds. The opencode.ai account session
-    // cookie (OAuth login), not the Go API key.
-    opencodeGoUsageWorkspaceId: process.env.OPENCODE_GO_USAGE_WORKSPACE_ID || DEFAULT_CONFIG.opencodeGoUsageWorkspaceId,
-    opencodeGoUsageAuthCookie: process.env.OPENCODE_GO_USAGE_AUTH_COOKIE || DEFAULT_CONFIG.opencodeGoUsageAuthCookie,
   }
 }
 
@@ -93,8 +89,6 @@ export async function createRouter(
   mergedConfig.strategy = normalizeRoutingStrategy(configStore.get('strategy') || mergedConfig.strategy)
   mergedConfig.ntfyUrl = configStore.get('ntfyUrl') || mergedConfig.ntfyUrl
   mergedConfig.visibleModels = configStore.get('visibleModels') || mergedConfig.visibleModels
-  mergedConfig.opencodeGoUsageWorkspaceId = configStore.get('opencodeGoUsageWorkspaceId') || mergedConfig.opencodeGoUsageWorkspaceId
-  mergedConfig.opencodeGoUsageAuthCookie = configStore.get('opencodeGoUsageAuthCookie') || mergedConfig.opencodeGoUsageAuthCookie
   keyManager = new KeyManager(mergedConfig, persistRuntimeState)
   const circuitBreaker = new CircuitBreaker(mergedConfig.circuitBreakerThreshold)
   quotaTracker = new QuotaTracker(2000, persistRuntimeState)

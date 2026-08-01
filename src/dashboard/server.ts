@@ -96,7 +96,7 @@ export class DashboardServer {
     }))
 
     this.app.post('/api/keys', wrap(async (req, res) => {
-      const { key, alias, priority, weight, enabled } = req.body
+      const { key, alias, priority, weight, enabled, goUsageWorkspaceId, goUsageAuthCookie } = req.body
       if (!key || typeof key !== 'string') {
         res.status(400).json({ error: 'Key is required' })
         return
@@ -106,6 +106,8 @@ export class DashboardServer {
         enabled: typeof enabled === 'boolean' ? enabled : true,
         priority: typeof priority === 'number' ? priority : 1,
         weight: typeof weight === 'number' ? weight : 1,
+        ...(typeof goUsageWorkspaceId === 'string' ? { goUsageWorkspaceId } : {}),
+        ...(typeof goUsageAuthCookie === 'string' ? { goUsageAuthCookie } : {}),
       })
       await this.persistKeys()
       res.json(this.serializeKey(entry))
@@ -168,7 +170,22 @@ export class DashboardServer {
     }))
 
     this.app.put('/api/keys/:id', wrap(async (req, res) => {
-      const { alias, enabled, priority, weight } = req.body ?? {}
+      const { alias, enabled, priority, weight, goUsageWorkspaceId, goUsageAuthCookie } = req.body ?? {}
+      const hasCredsUpdate = 'goUsageWorkspaceId' in (req.body ?? {}) || 'goUsageAuthCookie' in (req.body ?? {})
+
+      if (hasCredsUpdate) {
+        const credUpdates: Partial<Pick<ApiKey, 'goUsageWorkspaceId' | 'goUsageAuthCookie'>> = {}
+        if ('goUsageWorkspaceId' in (req.body ?? {}) && typeof goUsageWorkspaceId === 'string') {
+          credUpdates.goUsageWorkspaceId = goUsageWorkspaceId
+        }
+        if ('goUsageAuthCookie' in (req.body ?? {}) && typeof goUsageAuthCookie === 'string') {
+          credUpdates.goUsageAuthCookie = goUsageAuthCookie
+        }
+        if (Object.keys(credUpdates).length) {
+          this.keyManager.setGoUsageCreds(req.params.id, credUpdates)
+        }
+      }
+
       const updated = this.keyManager.updateKeySettings(req.params.id, {
         alias,
         enabled,
@@ -354,48 +371,25 @@ export class DashboardServer {
       res.json(this.logStream.getRecentLogs())
     })
 
-    this.app.get('/api/go-usage', wrap(async (_req, res) => {
-      const creds = this.resolveGoUsageCreds()
-      if (!creds) {
-        res.json({ success: false, configured: false, fetchedAt: Date.now(), error: 'Not configured' })
+    this.app.get('/api/keys/:id/usage', wrap(async (req, res) => {
+      const key = this.keyManager.getKeyById(req.params.id)
+      if (!key) {
+        res.status(404).json({ error: 'Key not found' })
         return
       }
+      const creds = { workspaceId: key.goUsageWorkspaceId, authCookie: key.goUsageAuthCookie }
       const result = await queryOpenCodeGoUsage(creds)
       res.json(result)
     }))
 
-    this.app.get('/api/go-usage-config', (_req, res) => {
-      const configured = this.isGoUsageConfigured()
-      res.json({
-        // Never echo the secret back. The masked tail is enough to confirm
-        // which cookie is stored without exposing it.
-        workspaceId: this.configStore.get('opencodeGoUsageWorkspaceId') || '',
-        authCookieMasked: this.maskCookie(this.configStore.get('opencodeGoUsageAuthCookie')),
-        configured,
-      })
-    })
-
-    this.app.put('/api/go-usage-config', (req, res) => {
-      const body = req.body ?? {}
-      if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
-        res.status(400).json({ error: 'workspaceId and/or authCookie required' })
-        return
-      }
-      // Fields present in the body are assigned verbatim (an empty string
-      // clears that field). Absent fields are left untouched, so a partial
-      // update can change just the workspace ID without wiping the cookie.
-      if ('workspaceId' in body && typeof body.workspaceId === 'string') {
-        this.configStore.set('opencodeGoUsageWorkspaceId', body.workspaceId.trim() as any)
-      }
-      if ('authCookie' in body && typeof body.authCookie === 'string') {
-        this.configStore.set('opencodeGoUsageAuthCookie', body.authCookie.trim() as any)
-      }
-      res.json({
-        workspaceId: this.configStore.get('opencodeGoUsageWorkspaceId') || '',
-        authCookieMasked: this.maskCookie(this.configStore.get('opencodeGoUsageAuthCookie')),
-        configured: this.isGoUsageConfigured(),
-      })
-    })
+    this.app.post('/api/keys/update-all-usages', wrap(async (_req, res) => {
+      const keys = this.keyManager.getKeys().filter((k) => k.goUsageWorkspaceId && k.goUsageAuthCookie)
+      const results = await Promise.all(keys.map(async (k) => {
+        const r = await queryOpenCodeGoUsage({ workspaceId: k.goUsageWorkspaceId, authCookie: k.goUsageAuthCookie })
+        return [k.id, r] as const
+      }))
+      res.json({ results: Object.fromEntries(results) })
+    }))
 
     this.app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       const message = err instanceof Error ? err.message : String(err)
@@ -427,19 +421,6 @@ export class DashboardServer {
 
   private async persistKeys(): Promise<void> {
     await this.secureStore.saveKeys(this.keyManager.toStoredEntries())
-  }
-
-  private resolveGoUsageCreds(): { workspaceId: string; authCookie: string } | null {
-    const workspaceId = (this.configStore.get('opencodeGoUsageWorkspaceId') || '').trim()
-    const authCookie = (this.configStore.get('opencodeGoUsageAuthCookie') || '').trim()
-    if (!workspaceId || !authCookie) return null
-    return { workspaceId, authCookie }
-  }
-
-  private isGoUsageConfigured(): boolean {
-    const workspaceId = (this.configStore.get('opencodeGoUsageWorkspaceId') || '').trim()
-    const authCookie = (this.configStore.get('opencodeGoUsageAuthCookie') || '').trim()
-    return Boolean(workspaceId && authCookie)
   }
 
   private maskCookie(cookie: string): string {
@@ -484,6 +465,9 @@ export class DashboardServer {
       quotaErrorCount: key.quotaErrorCount,
       lastQuotaError: key.lastQuotaError,
       quota,
+      goUsageWorkspaceId: key.goUsageWorkspaceId || '',
+      goUsageMaskedCookie: this.maskCookie(key.goUsageAuthCookie || ''),
+      goUsageConfigured: Boolean(key.goUsageWorkspaceId && key.goUsageAuthCookie),
       recentUsage: {
         last7d,
         last30d,

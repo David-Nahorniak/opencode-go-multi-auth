@@ -23,6 +23,10 @@ export interface OpenCodeGoUsageResult {
   success: boolean
   configured: boolean
   fetchedAt: number
+  // True when the scrape failed in a way that indicates the auth cookie is
+  // expired/invalid (HTTP 401/403, or a login redirect that hid the usage
+  // data). The dashboard surfaces this as a "renew cookie" request.
+  cookieExpired?: boolean
   rolling?: OpenCodeGoWindow
   weekly?: OpenCodeGoWindow
   monthly?: OpenCodeGoWindow
@@ -151,7 +155,8 @@ export async function queryOpenCodeGoUsage(
       signal: AbortSignal.timeout(options.requestTimeoutMs ?? SCRAPE_TIMEOUT_MS),
     })
     if (!res.ok) {
-      return { ...base, error: `OpenCode Go dashboard returned HTTP ${res.status}` }
+      const cookieExpired = res.status === 401 || res.status === 403 || res.status === 302 || res.status === 303
+      return { ...base, cookieExpired, error: `OpenCode Go dashboard returned HTTP ${res.status}` }
     }
     const html = await res.text()
 
@@ -167,7 +172,10 @@ export async function queryOpenCodeGoUsage(
     }
 
     if (!rolling && !weekly && !monthly) {
-      return { ...base, error: 'Could not parse rolling/weekly/monthly usage windows from the dashboard page' }
+      // A 2xx with no usage windows is the login-redirect signature: the
+      // auth cookie is expired/invalid and the server returned the login
+      // page instead of the workspace dashboard.
+      return { ...base, cookieExpired: true, error: 'Auth cookie is expired or invalid — renew it in the account settings' }
     }
 
     return {
