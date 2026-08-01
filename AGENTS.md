@@ -253,10 +253,17 @@ is the upstream itself.
 
 - `router-config.json` — persisted config (strategy, ports, etc.).
   Overrides env vars at boot via `src/storage/config-store.ts`.
-- `router-keys.enc` — AES-256-GCM encrypted API keys, key derived from
-  `PBKDF2(machine-identity, salt, 600_000, sha512)`. **Never** log or
-  print key material. **Never** commit this file (already in
-  `.gitignore`).
+- `router-keys.enc` — AES-256-GCM encrypted API keys. The AES master key is a
+  persistent 32-byte random key stored in `router-master.key` in the same
+  directory (mode 0600). It is deliberately **not** derived from
+  `os.hostname()`/`username` — that tied decryption to the machine identity,
+  which broke every time a Docker container was recreated (new container id =
+  new hostname), wiping all accounts on every rebuild. Keeping the master key
+  in `CONFIG_DIR` (the mounted `/data` volume in Docker, `~/.opencode`
+  otherwise) makes the store stable across rebuilds/restarts. A one-time
+  migration re-encrypts stores created by the old machine-identity derivation
+  on first load. **Never** log, print, or commit the master key file or key
+  material. **Never** commit `router-keys.enc` (already in `.gitignore`).
 - `router-state.json` — runtime state (key health, cooldowns, recent
   logs, quota usage). Persisted by `src/storage/runtime-state-store.ts`
   with a 100 ms debounce.

@@ -21,6 +21,7 @@ interface EncryptedPayload {
 
 export class SecureStore {
   private readonly filePath: string
+  private readonly masterKeyPath: string
   private masterKey?: Buffer
 
   constructor(configDir: string) {
@@ -29,19 +30,76 @@ export class SecureStore {
       fs.mkdirSync(dir, { recursive: true })
     }
     this.filePath = path.join(dir, 'router-keys.enc')
+    // The AES master key is a persistent 32-byte random key stored next to the
+    // encrypted key file. Deriving it from os.hostname() + username tied the
+    // key store to the machine identity, which broke decryption every time the
+    // container was recreated (Docker gives each container a fresh hostname =
+    // its short container id). Keeping the master key in CONFIG_DIR (a mounted
+    // volume in Docker, ~/.opencode otherwise) makes the store stable across
+    // rebuilds/restarts/container recreations while staying unreadable without
+    // access to that file.
+    this.masterKeyPath = path.join(dir, 'router-master.key')
   }
 
-  private deriveKey(): Buffer {
+  // Returns the 32-byte AES key, generating + persisting it on first use.
+  private getOrCreateMasterKey(): Buffer {
     if (this.masterKey) return this.masterKey
 
-    const machineId = `${os.hostname()}-${os.userInfo().username}`
-    const salt = crypto.createHash('sha256').update(machineId).digest().subarray(0, SALT_LENGTH)
-    this.masterKey = crypto.pbkdf2Sync(machineId, salt, PBKDF2_ITERATIONS, KEY_LENGTH, DIGEST)
+    if (fs.existsSync(this.masterKeyPath)) {
+      try {
+        const buf = Buffer.from(fs.readFileSync(this.masterKeyPath, 'utf8').trim(), 'hex')
+        if (buf.length === KEY_LENGTH) {
+          this.masterKey = buf
+          return this.masterKey
+        }
+      } catch {
+        // fall through to generating a fresh key
+      }
+    }
+
+    const buf = crypto.randomBytes(KEY_LENGTH)
+    try {
+      fs.writeFileSync(this.masterKeyPath, buf.toString('hex'), { mode: 0o600 })
+    } catch {
+      // If the master key can't be persisted, keep it in memory only: keys
+      // still work for this process lifetime but won't survive a restart.
+      // Better than crashing — the dashboard can show the failure.
+    }
+    this.masterKey = buf
     return this.masterKey
   }
 
+  // Legacy key derivation (machine identity). Kept only to migrate stores
+  // encrypted by previous versions before the persistent master key existed.
+  private legacyDeriveKey(): Buffer {
+    const machineId = `${os.hostname()}-${os.userInfo().username}`
+    const salt = crypto.createHash('sha256').update(machineId).digest().subarray(0, SALT_LENGTH)
+    return crypto.pbkdf2Sync(machineId, salt, PBKDF2_ITERATIONS, KEY_LENGTH, DIGEST)
+  }
+
+  private decryptWith(payload: EncryptedPayload, key: Buffer): StoredApiKey[] | null {
+    try {
+      const iv = Buffer.from(payload.iv, 'hex')
+      const tag = Buffer.from(payload.tag, 'hex')
+      const encrypted = Buffer.from(payload.data, 'hex')
+
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
+      decipher.setAuthTag(tag)
+
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
+      const parsed = JSON.parse(decrypted.toString('utf8'))
+      if (!Array.isArray(parsed)) return null
+
+      return parsed
+        .map((entry) => this.normalizeEntry(entry))
+        .filter((entry): entry is StoredApiKey => entry !== null)
+    } catch {
+      return null
+    }
+  }
+
   async saveKeys(keys: StoredApiKey[]): Promise<void> {
-    const key = this.deriveKey()
+    const key = this.getOrCreateMasterKey()
     const iv = crypto.randomBytes(IV_LENGTH)
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
     const salt = crypto.randomBytes(SALT_LENGTH)
@@ -63,28 +121,33 @@ export class SecureStore {
   async loadKeys(): Promise<StoredApiKey[]> {
     if (!fs.existsSync(this.filePath)) return []
 
+    let payload: EncryptedPayload
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf8')
-      const payload: EncryptedPayload = JSON.parse(raw)
-
-      const key = this.deriveKey()
-      const iv = Buffer.from(payload.iv, 'hex')
-      const tag = Buffer.from(payload.tag, 'hex')
-      const encrypted = Buffer.from(payload.data, 'hex')
-
-      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-      decipher.setAuthTag(tag)
-
-      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
-      const parsed = JSON.parse(decrypted.toString('utf8'))
-      if (!Array.isArray(parsed)) return []
-
-      return parsed
-        .map((entry) => this.normalizeEntry(entry))
-        .filter((entry): entry is StoredApiKey => entry !== null)
+      payload = JSON.parse(fs.readFileSync(this.filePath, 'utf8'))
     } catch {
       return []
     }
+
+    // Primary path: the persistent master key.
+    const primary = this.decryptWith(payload, this.getOrCreateMasterKey())
+    if (primary !== null) return primary
+
+    // Migration: a store encrypted under the old machine-identity key (e.g.
+    // created before the master-key file existed, or on a container that was
+    // recreated). Decrypt with the legacy key, then re-encrypt under the new
+    // persistent master key so future loads are stable across hostname
+    // changes.
+    const legacy = this.decryptWith(payload, this.legacyDeriveKey())
+    if (legacy !== null && legacy.length > 0) {
+      try {
+        await this.saveKeys(legacy)
+      } catch {
+        // re-encryption is best-effort; the in-memory list is still returned
+      }
+      return legacy
+    }
+
+    return []
   }
 
   async addKey(entry: StoredApiKey): Promise<void> {

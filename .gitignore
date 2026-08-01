@@ -3,6 +3,7 @@ dist/
 *.log
 .env
 *.enc
+*.key
 .DS_Store
 repos/
 .playwright-mcp/*.yml
