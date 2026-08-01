@@ -122,6 +122,7 @@ const api = {
     return this.req(`/api/zen-provider-models?provider=${q}`)
   },
   setVisibleModels(payload) { return this.req('/api/visible-models', { method: 'PUT', body: payload }); },
+  testNotification(payload) { return this.req('/api/notifications/test', { method: 'POST', body: payload }); },
   notifications() { return this.req('/api/notifications'); },
   testKey(id) { return this.req(`/api/keys/${id}/test`, { method: 'POST' }); },
   recentLogs() { return this.req('/api/logs'); },
@@ -2253,23 +2254,49 @@ async function renderSettings() {
     const input = ntfyRow.querySelector('.ntfy-input');
     const statusEl = ntfyRow.querySelector('.ntfy-status');
     const saveBtn = ntfyRow.querySelector('.ntfy-save');
+    const testBtn = ntfyRow.querySelector('.ntfy-test');
     if (input) input.value = cfg.notifyUrls || '';
     if (statusEl) {
       statusEl.textContent = cfg.notifyUrls ? 'Notifications enabled' : 'Notifications disabled';
       statusEl.style.color = cfg.notifyUrls ? 'var(--green)' : 'var(--text-muted)';
     }
+    const updateStatusEl = (url) => {
+      if (!statusEl) return;
+      statusEl.textContent = url ? 'Notifications enabled' : 'Notifications disabled';
+      statusEl.style.color = url ? 'var(--green)' : 'var(--text-muted)';
+    };
     if (saveBtn) {
       saveBtn.onclick = async () => {
         const url = input ? input.value.trim() : '';
         try {
           await api.setConfig({ notifyUrls: url });
-          if (statusEl) {
-            statusEl.textContent = url ? 'Notifications enabled' : 'Notifications disabled';
-            statusEl.style.color = url ? 'var(--green)' : 'var(--text-muted)';
-          }
+          updateStatusEl(url);
           toast('Notification URL updated', 'success');
         } catch (err) {
           toast('Failed to save: ' + (err instanceof Error ? err.message : String(err)), 'error');
+        }
+      };
+    }
+    if (testBtn) {
+      testBtn.onclick = async () => {
+        const url = input ? input.value.trim() : '';
+        if (!url) {
+          toast('Enter at least one Apprise URL first', 'error');
+          return;
+        }
+        testBtn.disabled = true;
+        const origText = testBtn.textContent;
+        testBtn.textContent = 'Sending…';
+        try {
+          const result = await api.testNotification({ notifyUrls: url });
+          updateStatusEl(url);
+          await renderNotifLog(result.history);
+          toast('Test notification sent', 'success');
+        } catch (err) {
+          toast('Failed to send test: ' + (err instanceof Error ? err.message : String(err)), 'error');
+        } finally {
+          testBtn.disabled = false;
+          testBtn.textContent = origText;
         }
       };
     }
@@ -2300,25 +2327,30 @@ async function renderSettings() {
   // Notification log
   const notifBody = $('#notif-log-body');
   const notifCount = $('#notif-log-count');
-  if (notifBody && notifCount) {
-    try {
-      const history = await api.notifications();
-      notifCount.textContent = `${history.length} sent this session`;
-      if (!history.length) {
-        notifBody.innerHTML = '<div class="empty-state">No notifications sent yet.</div>';
-      } else {
-        notifBody.innerHTML = history.slice().reverse().slice(0, 20).map((n) => `
-          <div class="notif-entry">
-            <span class="notif-time">${escapeHtml(fmtDateTime(new Date(n.timestamp).toISOString()))}</span>
-            <span class="notif-title">${escapeHtml(n.title)}</span>
-            <span class="notif-msg">${escapeHtml(n.message.length > 80 ? n.message.slice(0, 80) + '…' : n.message)}</span>
-          </div>
-        `).join('');
+  async function renderNotifLog(history) {
+    if (!notifBody || !notifCount) return;
+    if (!history) {
+      try {
+        history = await api.notifications();
+      } catch {
+        notifBody.innerHTML = '<div class="empty-state">Could not load notification log.</div>';
+        return;
       }
-    } catch {
-      notifBody.innerHTML = '<div class="empty-state">Could not load notification log.</div>';
+    }
+    notifCount.textContent = `${history.length} sent this session`;
+    if (!history.length) {
+      notifBody.innerHTML = '<div class="empty-state">No notifications sent yet.</div>';
+    } else {
+      notifBody.innerHTML = history.slice().reverse().slice(0, 20).map((n) => `
+        <div class="notif-entry">
+          <span class="notif-time">${escapeHtml(fmtDateTime(new Date(n.timestamp).toISOString()))}</span>
+          <span class="notif-title">${escapeHtml(n.title)}</span>
+          <span class="notif-msg">${escapeHtml(n.message.length > 80 ? n.message.slice(0, 80) + '…' : n.message)}</span>
+        </div>
+      `).join('');
     }
   }
+  await renderNotifLog();
 }
 
 // Render settings on first visit

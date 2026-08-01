@@ -327,6 +327,27 @@ export class DashboardServer {
       res.json(this.notifier.getHistory())
     })
 
+    this.app.post('/api/notifications/test', wrap(async (req, res) => {
+      // Auto-save: if the request carries notifyUrls, persist it and update the
+      // notifier before sending, so the test uses the freshly-typed value
+      // without requiring the user to hit Save first.
+      if (typeof req.body?.notifyUrls === 'string') {
+        const { notifyUrls } = req.body
+        this.configStore.set('notifyUrls', notifyUrls as any)
+        this.notifier.updateUrl(notifyUrls)
+      }
+      if (!this.notifier.enabled) {
+        res.status(400).json({ error: 'No notification URLs configured' })
+        return
+      }
+      await this.notifier.send(
+        'Test notification',
+        'This is a test notification from the OpenCode Go Multi-Auth router.',
+        'default',
+      )
+      res.json({ ok: true, history: this.notifier.getHistory() })
+    }))
+
     this.app.post('/api/keys/:id/test', async (req, res) => {
       const key = this.keyManager.getKeyById(req.params.id)
       if (!key) {
