@@ -24,9 +24,13 @@ export interface OpenCodeGoUsageResult {
   configured: boolean
   fetchedAt: number
   // True when the scrape failed in a way that indicates the auth cookie is
-  // expired/invalid (HTTP 401/403, or a login redirect that hid the usage
-  // data). The dashboard surfaces this as a "renew cookie" request.
+  // expired/invalid (HTTP 401/403, or a login redirect). The dashboard
+  // surfaces this as a "renew cookie" request.
   cookieExpired?: boolean
+  // True when the workspace/cookie are valid but the Go plan is not
+  // active on this account. The dashboard then shows "plan not activated"
+  // and the account should be disabled so routing stops trying it.
+  planNotActivated?: boolean
   rolling?: OpenCodeGoWindow
   weekly?: OpenCodeGoWindow
   monthly?: OpenCodeGoWindow
@@ -172,10 +176,14 @@ export async function queryOpenCodeGoUsage(
     }
 
     if (!rolling && !weekly && !monthly) {
-      // A 2xx with no usage windows is the login-redirect signature: the
-      // auth cookie is expired/invalid and the server returned the login
-      // page instead of the workspace dashboard.
-      return { ...base, cookieExpired: true, error: 'Auth cookie is expired or invalid — renew it in the account settings' }
+      // A 2xx with no usage windows: either the auth cookie is expired and
+      // the server returned the login page, or the workspace/cookie are
+      // valid but there is no active Go plan on this account.
+      const looksLikeLogin = /\/auth\/authorize|sign[\s-]?in|continue with (github|google)|data-slot="login/i.test(html)
+      if (looksLikeLogin) {
+        return { ...base, cookieExpired: true, error: 'Auth cookie is expired or invalid — renew it in the account settings' }
+      }
+      return { ...base, planNotActivated: true, error: 'No active OpenCode Go plan on this account — enable the plan in opencode.ai or disable this account' }
     }
 
     return {

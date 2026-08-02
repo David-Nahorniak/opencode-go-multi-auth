@@ -8,6 +8,18 @@ A native TypeScript OpenCode plugin and proxy router that pools multiple OpenCod
 
 > **💰 Support the project:** Use this referral link to [sign up for OpenCode Go](https://opencode.ai/go?ref=HF6N2D2RCR) and get **$5 free credit** to start. Every referral helps keep this project maintained.
 
+## Fork: changes vs upstream
+
+This fork (`git.nahorniak.cz/David-Nahorniak/opencode-go-multi-auth`) is based on the upstream `Rishabh-Bajpai/opencode-go-multi-auth` (commit `7ebd499`). Everything added beyond the original:
+
+- **Docker** — `Dockerfile` (multi-stage `node:22-bookworm-slim`, prunes `devDependencies`, installs `apprise`) and `docker-compose.yml`. Persisted state on a `/data` volume (`CONFIG_DIR=/data`), `HEALTHCHECK` via `/healthz`, ports `18904`/`18905` mapped outward.
+- **Forgejo CI** — `.forgejo/workflows/build-and-publish.yml` builds and publishes the image to the Forgejo Container Registry on tag push `v*` (and `workflow_dispatch`), tagged `<reg>/<owner>/<repo>:<version>` and `:latest`.
+- **Apprise notifications** — the `ntfy` notifier is replaced by the general [Apprise](https://github.com/caronc/apprise) notifier (Telegram, Discord, ntfy, email, Slack, …). New env vars `NOTIFY_URLS` (list of URLs separated by spaces/commas/newlines) and `APPRISE_BIN`; `NTFY_URL` is a deprecated alias for backward compatibility. `apprise` is pre-installed in the Docker image; on bare-metal/plugin installs the user installs it (`pip install apprise`). URLs and a Test button can be changed from dashboard Settings.
+- **Proxy access token** — the proxy authenticates every incoming request with a shared bearer / `x-api-key` token (timing-safe compare in `src/proxy/server.ts`). The token is **stripped** from the header and the proxy then injects the real pooled upstream key; opencode sends the proxy token as the provider `apiKey`. Configurable via `proxyAccessToken`, re-generatable from dashboard Settings. The plugin (`src/plugin/index.ts`) prints it in setup instructions and supplies the `multi-auth-zen` provider.
+- **Model blocklist** — `disabledModels` in the config; the proxy returns `404` before routing processes a request for a disabled model.
+- **Go plan usage scraping** — new module `src/proxy/opencode-go-usage.ts` parses the workspace dashboard HTML (both SolidJS SSR and the newer `data-slot` format) for rolling/weekly/monthly usage windows and reset times. Auth is the opencode account session cookie (OAuth login), not the Go API key. Per-account `goUsageWorkspaceId` / `goUsageAuthCookie` are attached to the API key and encrypted in `router-keys.enc`; managed via `KeyManager.setGoUsageCreds`. Usage display moved to the Accounts page. The module detects an expired cookie (`cookieExpired`) and an unactivated plan (`planNotActivated`).
+- **Miscellaneous** — `.gitignore` adds `*.key`; `SecureStore` fixes (key add/remove fixes, missing storage API key); minor proxy server fixes.
+
 ## Preview
 
 Click any screenshot to view full resolution.

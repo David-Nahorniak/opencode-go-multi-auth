@@ -306,6 +306,56 @@ export class ProxyServer {
           }
         }
 
+        // Key/plan-fatal provider errors: auth rejected (invalid key) or no
+        // active Go plan / subscription on this account. These are tied to the
+        // selected key, not the request — so fail over to the next key instead
+        // of surfacing the error and stalling routing on one bad account.
+        if (upstreamRes.status === 401 || upstreamRes.status === 403) {
+          const messageText = (await responseTextPromise).slice(0, 300)
+          const circuitState = this.circuitBreaker.recordFailure(key.id)
+          this.keyManager.markError(key.id)
+          this.keyManager.recordRequest(key.id, {
+            statusCode: upstreamRes.status,
+            durationMs: duration,
+            model: prepared.model,
+            sessionId: upstreamSessionId ?? sessionKey ?? null,
+            successful: false,
+          })
+          attemptedKeyIds.add(key.id)
+
+          lastError = `HTTP ${upstreamRes.status} for key "${key.alias}"${messageText ? `: ${messageText}` : ''}`
+          this.logStream.emit(
+            this.logger,
+            'warn',
+            `Key "${key.alias}" rejected by upstream (HTTP ${upstreamRes.status}), failing over`,
+            {
+              method: req.method,
+              path: targetPath,
+              statusCode: upstreamRes.status,
+              keyAlias: key.alias,
+              keyId: key.id,
+              duration,
+              model: prepared.model,
+              strategy,
+              routeReason: reason,
+              selectedBySession,
+              sessionId: upstreamSessionId ?? sessionKey ?? null,
+              errorSnippet: messageText,
+              attempt: attempt + 1,
+              upstream: isZenRequest ? 'zen' : 'go',
+            },
+          )
+
+          if (circuitState === CircuitState.OPEN) {
+            await this.notifier.circuitTripped(key.alias, key.consecutiveErrors)
+          }
+
+          if (attempt < maxAttempts - 1) {
+            continue
+          }
+          // No other key to try — fall through and surface this error.
+        }
+
         if (upstreamRes.status >= 500) {
           const circuitState = this.circuitBreaker.recordFailure(key.id)
           this.keyManager.markError(key.id)
@@ -336,7 +386,12 @@ export class ProxyServer {
           if (attempt < maxAttempts - 1) {
             continue
           }
-        } else {
+        } else if (upstreamRes.status < 400) {
+          // Genuine success. Reset the circuit/consecutive errors only for
+          // 2xx/3xx — 4xx responses (other than 401/403 handled above and
+          // 402/429 handled earlier) are client-side issues (bad model,
+          // malformed request) that are not the key's fault, so they are
+          // passed through without marking the key unhealthy.
           this.circuitBreaker.recordSuccess(key.id)
           key.consecutiveErrors = 0
         }
