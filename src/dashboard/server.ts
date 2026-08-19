@@ -91,7 +91,7 @@ export class DashboardServer {
     }))
 
     this.app.post('/api/keys', wrap(async (req, res) => {
-      const { key, alias, priority, weight, enabled, goUsageWorkspaceId, goUsageAuthCookie } = req.body
+      const { key, alias, priority, weight, enabled } = req.body
       if (!key || typeof key !== 'string') {
         res.status(400).json({ error: 'Key is required' })
         return
@@ -101,8 +101,6 @@ export class DashboardServer {
         enabled: typeof enabled === 'boolean' ? enabled : true,
         priority: typeof priority === 'number' ? priority : 1,
         weight: typeof weight === 'number' ? weight : 1,
-        ...(typeof goUsageWorkspaceId === 'string' ? { goUsageWorkspaceId } : {}),
-        ...(typeof goUsageAuthCookie === 'string' ? { goUsageAuthCookie } : {}),
       })
       await this.persistKeys()
       res.json(this.serializeKey(entry))
@@ -165,21 +163,7 @@ export class DashboardServer {
     }))
 
     this.app.put('/api/keys/:id', wrap(async (req, res) => {
-      const { alias, enabled, priority, weight, goUsageWorkspaceId, goUsageAuthCookie } = req.body ?? {}
-      const hasCredsUpdate = 'goUsageWorkspaceId' in (req.body ?? {}) || 'goUsageAuthCookie' in (req.body ?? {})
-
-      if (hasCredsUpdate) {
-        const credUpdates: Partial<Pick<ApiKey, 'goUsageWorkspaceId' | 'goUsageAuthCookie'>> = {}
-        if ('goUsageWorkspaceId' in (req.body ?? {}) && typeof goUsageWorkspaceId === 'string') {
-          credUpdates.goUsageWorkspaceId = goUsageWorkspaceId
-        }
-        if ('goUsageAuthCookie' in (req.body ?? {}) && typeof goUsageAuthCookie === 'string') {
-          credUpdates.goUsageAuthCookie = goUsageAuthCookie
-        }
-        if (Object.keys(credUpdates).length) {
-          this.keyManager.setGoUsageCreds(req.params.id, credUpdates)
-        }
-      }
+      const { alias, enabled, priority, weight } = req.body ?? {}
 
       const updated = this.keyManager.updateKeySettings(req.params.id, {
         alias,
@@ -413,15 +397,17 @@ export class DashboardServer {
         res.status(404).json({ error: 'Key not found' })
         return
       }
-      const creds = { workspaceId: key.goUsageWorkspaceId, authCookie: key.goUsageAuthCookie }
-      const result = await queryOpenCodeGoUsage(creds)
+      const result = await queryOpenCodeGoUsage(key.key, {
+        upstreamUrl: this.configStore.get('upstreamUrl'),
+      })
       res.json(result)
     }))
 
     this.app.post('/api/keys/update-all-usages', wrap(async (_req, res) => {
-      const keys = this.keyManager.getKeys().filter((k) => k.goUsageWorkspaceId && k.goUsageAuthCookie)
+      const upstreamUrl = this.configStore.get('upstreamUrl')
+      const keys = this.keyManager.getKeys()
       const results = await Promise.all(keys.map(async (k) => {
-        const r = await queryOpenCodeGoUsage({ workspaceId: k.goUsageWorkspaceId, authCookie: k.goUsageAuthCookie })
+        const r = await queryOpenCodeGoUsage(k.key, { upstreamUrl })
         return [k.id, r] as const
       }))
       res.json({ results: Object.fromEntries(results) })
@@ -482,12 +468,6 @@ export class DashboardServer {
     return (json.data || []).map((m) => m.id).filter(Boolean) as string[]
   }
 
-  private maskCookie(cookie: string): string {
-    if (!cookie) return ''
-    if (cookie.length <= 8) return '****'
-    return `${cookie.slice(0, 3)}…${cookie.slice(-4)} (${cookie.length})`
-  }
-
   private serializeKeys() {
     return this.keyManager.getKeys().map((key) => this.serializeKey(key))
   }
@@ -524,9 +504,6 @@ export class DashboardServer {
       quotaErrorCount: key.quotaErrorCount,
       lastQuotaError: key.lastQuotaError,
       quota,
-      goUsageWorkspaceId: key.goUsageWorkspaceId || '',
-      goUsageMaskedCookie: this.maskCookie(key.goUsageAuthCookie || ''),
-      goUsageConfigured: Boolean(key.goUsageWorkspaceId && key.goUsageAuthCookie),
       recentUsage: {
         last7d,
         last30d,

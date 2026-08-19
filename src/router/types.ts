@@ -31,11 +31,6 @@ export interface ApiKey {
   lastStatusCode: number | null
   lastModel: string | null
   lastSessionId: string | null
-  // OpenCode Go plan usage scraping for this account. The auth cookie is an
-  // opencode.ai account session (from the OAuth login), not the Go API key.
-  // Stored encrypted with the key in router-keys.enc. Empty = usage hidden.
-  goUsageWorkspaceId: string
-  goUsageAuthCookie: string
 }
 
 export interface StoredApiKey {
@@ -46,8 +41,6 @@ export interface StoredApiKey {
   enabled: boolean
   priority: number
   weight: number
-  goUsageWorkspaceId?: string
-  goUsageAuthCookie?: string
 }
 
 export enum RoutingStrategy {

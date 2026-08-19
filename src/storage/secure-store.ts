@@ -188,8 +188,6 @@ export class SecureStore {
       enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
       priority: typeof value.priority === 'number' && Number.isFinite(value.priority) ? value.priority : 1,
       weight: typeof value.weight === 'number' && Number.isFinite(value.weight) ? value.weight : 1,
-      ...(typeof value.goUsageWorkspaceId === 'string' && value.goUsageWorkspaceId ? { goUsageWorkspaceId: value.goUsageWorkspaceId } : {}),
-      ...(typeof value.goUsageAuthCookie === 'string' && value.goUsageAuthCookie ? { goUsageAuthCookie: value.goUsageAuthCookie } : {}),
     }
   }
 

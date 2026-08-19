@@ -131,7 +131,7 @@
             <p class="page-subtitle">Drag to reorder priority. Click an alias to rename. Click the masked key to replace it.</p>
           </div>
           <div class="page-actions">
-            <button class="btn" id="update-all-usages-btn" title="Scrape rolling/weekly/monthly Go plan usage for every account that has workspace + auth cookie set">↻ Update all usages</button>
+            <button class="btn" id="update-all-usages-btn" title="Fetch rolling/weekly/monthly Go plan usage for every account via the usage API">↻ Update all usages</button>
             <button class="btn btn-primary" id="add-key-btn">+ Add key</button>
           </div>
         </div>
@@ -445,19 +445,6 @@
           <label>
             Weight
             <input class="input" type="number" min="1" id="key-weight-input" value="1">
-          </label>
-        </div>
-        <div class="modal-divider"></div>
-        <div class="modal-subhead">OpenCode Go plan usage (optional)</div>
-        <p class="modal-hint">Scrape rolling / weekly / monthly usage + reset from the opencode.ai workspace dashboard. Needs the workspace ID (in the workspace URL) and the <code>auth</code> cookie (browser DevTools → Cookies for opencode.ai). Leave empty to hide usage for this account.</p>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-          <label>
-            Workspace ID
-            <input class="input input-mono" id="key-go-workspace-input" type="text" placeholder="ws_…" autocomplete="off">
-          </label>
-          <label>
-            Auth cookie
-            <input class="input input-mono" id="key-go-cookie-input" type="password" placeholder="auth cookie value" autocomplete="off">
           </label>
         </div>
       </div>
