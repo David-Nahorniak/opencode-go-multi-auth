@@ -1,3 +1,8 @@
+> ⚠️ **Project Deprecated — No Longer Maintained**
+>
+> This fork of **opencode-go-multi-auth** is **no longer maintained**. I moved to [**cheaper-inference/OmniRoute**](https://github.com/cheaper-inference/OmniRoute/).
+
+
 # OpenCode Go Multi-Account Router
 
 > **⚠️ Educational Purpose Only** — This project is provided for learning and educational purposes. It demonstrates how to build a multi-account proxy router for OpenCode Go and Zen API subscriptions. Users are responsible for complying with OpenCode's terms of service.
